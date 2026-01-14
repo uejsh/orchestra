@@ -10,10 +10,6 @@ import json
 from typing import Any, Dict, Optional, Union, List
 
 from .base import BaseAdapter
-from ..core.embeddings import EmbeddingGenerator
-from ..core.hierarchical_embeddings import HierarchicalEmbeddingGenerator, HierarchicalMatcher
-from ..core.semantic_store import SemanticStore
-from ..core.compression import CompressionManager
 from ..core.metrics import MetricsTracker
 
 logger = logging.getLogger(__name__)
@@ -42,6 +38,9 @@ class OrchestraLangChainConfig:
         
         # Cost tracking
         llm_cost_per_1k_tokens: float = 0.03,
+        
+        # Backend
+        redis_url: Optional[str] = None
     ):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
@@ -51,14 +50,20 @@ class OrchestraLangChainConfig:
         self.cache_ttl = cache_ttl
         self.max_cache_size = max_cache_size
         self.enable_compression = enable_compression
+        self.enable_compression = enable_compression
         self.llm_cost_per_1k_tokens = llm_cost_per_1k_tokens
+        self.redis_url = redis_url
+        
+        # Observability
+        self.enable_recorder = True
+
 
 
 class EnhancedLangChain(BaseAdapter):
     """
     Adapter for LangChain (both Chains and Runnables).
     
-    Features (configurable):
+    Features (configurable via OrchestraLangChainConfig):
     - Semantic caching with FAISS/NumPy
     - Hierarchical embeddings for better matching (optional)
     - Compression for smaller cache footprint (optional)
@@ -73,35 +78,21 @@ class EnhancedLangChain(BaseAdapter):
         self.chain = chain_or_runnable
         self.config = config or OrchestraLangChainConfig()
         
-        # Initialize base embedding generator
-        self.base_embedding_gen = EmbeddingGenerator(
-            model_name=self.config.embedding_model
-        )
+        # ====================================================================
+        # UNIFIED CACHE MANAGER (Replaces duplicate component initialization)
+        # ====================================================================
+        from ..core.cache_manager import CacheManager
         
-        # Hierarchical embeddings (optional)
-        if self.config.enable_hierarchical:
-            self.hierarchical_gen = HierarchicalEmbeddingGenerator(self.base_embedding_gen)
-            self.hierarchical_matcher = HierarchicalMatcher(
-                weight_l1=self.config.hierarchical_weight_l1,
-                weight_l2=self.config.hierarchical_weight_l2
-            )
-            logger.info("🔬 Hierarchical embeddings ENABLED (LangChain)")
-        else:
-            self.hierarchical_gen = None
-            self.hierarchical_matcher = None
-        
-        # Compression (optional)
-        if self.config.enable_compression:
-            self.compressor = CompressionManager(enable_compression=True)
-            logger.info("🗜️  Compression ENABLED (LangChain)")
-        else:
-            self.compressor = None
-        
-        # Semantic store
-        self.semantic_store = SemanticStore(
-            dimension=self.base_embedding_gen.dimension,
+        self.cache_manager = CacheManager(
+            embedding_model_name=self.config.embedding_model,
             similarity_threshold=self.config.similarity_threshold,
-            max_cache_size=self.config.max_cache_size
+            max_cache_size=self.config.max_cache_size,
+            cache_ttl=self.config.cache_ttl,
+            enable_compression=self.config.enable_compression,
+            enable_hierarchical=self.config.enable_hierarchical,
+            hierarchical_weight_l1=self.config.hierarchical_weight_l1,
+            hierarchical_weight_l2=self.config.hierarchical_weight_l2,
+            redis_url=self.config.redis_url
         )
         
         # Metrics
@@ -109,8 +100,13 @@ class EnhancedLangChain(BaseAdapter):
             llm_cost_per_1k_tokens=self.config.llm_cost_per_1k_tokens
         )
         
-        # Cache for hierarchical embeddings
-        self._hierarchical_cache: Dict[str, Any] = {}
+        # Recorder
+        if getattr(self.config, "enable_recorder", True):
+            from ..recorder.logger import OrchestraRecorder
+            self.recorder = OrchestraRecorder.get_instance()
+            logger.info("🎥 Orchestra Recorder ENABLED (LangChain)")
+        else:
+            self.recorder = None
         
         logger.info("✨ Orchestra enhancement enabled for LangChain")
 
@@ -138,22 +134,44 @@ class EnhancedLangChain(BaseAdapter):
         if cached_result is not None:
             latency = time.time() - start_time
             self.metrics.record_cache_hit(latency)
+            
+            if self.recorder:
+                with self.recorder.trace(input_params=input, metadata={"cached": True, "adapter": "langchain"}) as trace_id:
+                     self.recorder.finish_trace(trace_id, cached_result, total_cost=0.0)
+                     
             logger.info(f"💰 Cache HIT (LangChain) - Latency: {latency:.3f}s")
             return cached_result
         
         # 3. Execute
         self.metrics.start_execution()
         
-        # Support both Runnable .invoke() and Chain .run() / .__call__
-        if hasattr(self.chain, "invoke"):
-            result = self.chain.invoke(input, config, **kwargs)
-        elif hasattr(self.chain, "run") and isinstance(input, str):
-            result = self.chain.run(input, **kwargs)
+        if self.recorder:
+            trace_ctx = self.recorder.trace(input_params=input, metadata={"cached": False, "adapter": "langchain"})
+            trace_id = trace_ctx.__enter__()
         else:
-            result = self.chain(input, **kwargs)
-            if isinstance(result, dict) and len(result) == 1:
-                # Unpack single dict result often returned by chains
-                result = list(result.values())[0]
+            trace_ctx = None
+            trace_id = None
+
+        try:
+            # Support both Runnable .invoke() and Chain .run() / .__call__
+            if hasattr(self.chain, "invoke"):
+                result = self.chain.invoke(input, config, **kwargs)
+            elif hasattr(self.chain, "run") and isinstance(input, str):
+                result = self.chain.run(input, **kwargs)
+            else:
+                result = self.chain(input, **kwargs)
+                if isinstance(result, dict) and len(result) == 1:
+                    # Unpack single dict result often returned by chains
+                    result = list(result.values())[0]
+            
+            if trace_ctx:
+                self.recorder.finish_trace(trace_id, result, total_cost=0.0)
+                trace_ctx.__exit__(None, None, None)
+                
+        except Exception as e:
+            if trace_ctx:
+                trace_ctx.__exit__(type(e), e, e.__traceback__)
+            raise e
 
         latency = time.time() - start_time
         self.metrics.end_execution(latency)
@@ -177,24 +195,46 @@ class EnhancedLangChain(BaseAdapter):
         if cached_result is not None:
             latency = time.time() - start_time
             self.metrics.record_cache_hit(latency)
+            
+            if self.recorder:
+                with self.recorder.trace(input_params=input, metadata={"cached": True, "adapter": "langchain_async"}) as trace_id:
+                     self.recorder.finish_trace(trace_id, cached_result, total_cost=0.0)
+                     
             logger.info(f"💰 Cache HIT (LangChain Async) - Latency: {latency:.3f}s")
             return cached_result
         
         # 3. Execute
         self.metrics.start_execution()
         
-        if hasattr(self.chain, "ainvoke"):
-            result = await self.chain.ainvoke(input, config, **kwargs)
-        elif hasattr(self.chain, "arun") and isinstance(input, str):
-            result = await self.chain.arun(input, **kwargs)
-        elif hasattr(self.chain, "acall"):
-            result = await self.chain.acall(input, **kwargs)
-            if isinstance(result, dict) and len(result) == 1:
-                result = list(result.values())[0]
+        if self.recorder:
+            trace_ctx = self.recorder.trace(input_params=input, metadata={"cached": False, "adapter": "langchain_async"})
+            trace_id = trace_ctx.__enter__()
         else:
-            # Fallback to sync invoke if async not supported
-            logger.warning("Chain does not support async invoke/run, falling back to sync.")
-            result = self.chain.invoke(input, config, **kwargs)
+            trace_ctx = None
+            trace_id = None
+
+        try:
+            if hasattr(self.chain, "ainvoke"):
+                result = await self.chain.ainvoke(input, config, **kwargs)
+            elif hasattr(self.chain, "arun") and isinstance(input, str):
+                result = await self.chain.arun(input, **kwargs)
+            elif hasattr(self.chain, "acall"):
+                result = await self.chain.acall(input, **kwargs)
+                if isinstance(result, dict) and len(result) == 1:
+                    result = list(result.values())[0]
+            else:
+                # Fallback to sync invoke if async not supported
+                logger.warning("Chain does not support async invoke/run, falling back to sync.")
+                result = self.chain.invoke(input, config, **kwargs)
+                
+            if trace_ctx:
+                self.recorder.finish_trace(trace_id, result, total_cost=0.0)
+                trace_ctx.__exit__(None, None, None)
+                
+        except Exception as e:
+            if trace_ctx:
+                trace_ctx.__exit__(type(e), e, e.__traceback__)
+            raise e
 
         latency = time.time() - start_time
         self.metrics.end_execution(latency)
@@ -205,109 +245,16 @@ class EnhancedLangChain(BaseAdapter):
         return result
 
     # ========================================================================
-    # CACHE OPERATIONS
+    # CACHE OPERATIONS (Delegated to CacheManager)
     # ========================================================================
     
     def _check_cache(self, input_str: str, cache_key: str) -> Optional[Any]:
-        """Check semantic cache for similar inputs"""
-        
-        if self.config.enable_hierarchical:
-            return self._check_cache_hierarchical(input_str, cache_key)
-        else:
-            return self._check_cache_simple(input_str)
-    
-    def _check_cache_simple(self, input_str: str) -> Optional[Any]:
-        """Simple single-level semantic matching"""
-        query_embedding = self.base_embedding_gen.generate(input_str)
-        results = self.semantic_store.search(query_embedding, top_k=1)
-        
-        if not results:
-            return None
-        
-        cached_state, similarity = results[0]
-        
-        logger.debug(
-            f"Found cached result (similarity: {similarity:.3f}, "
-            f"age: {time.time() - cached_state.timestamp:.1f}s)"
-        )
-        
-        # Decompress if needed
-        value = cached_state.value
-        if self.compressor:
-            value = self.compressor.decompress(value)
-        
-        return value
-    
-    def _check_cache_hierarchical(self, input_str: str, cache_key: str) -> Optional[Any]:
-        """Hierarchical 2-level semantic matching"""
-        query_h_emb = self.hierarchical_gen.generate(input_str)
-        
-        # Coarse search
-        candidates = self.semantic_store.search(
-            query_h_emb.full_embedding,
-            top_k=5,
-            min_similarity=self.config.similarity_threshold * 0.9
-        )
-        
-        if not candidates:
-            return None
-        
-        # Refine with hierarchical matching
-        best_match = None
-        best_score = -1.0
-        
-        for state, coarse_score in candidates:
-            cached_h_emb = self._hierarchical_cache.get(state.key)
-            
-            if cached_h_emb:
-                score = self.hierarchical_matcher.compute_similarity(query_h_emb, cached_h_emb)
-            else:
-                score = coarse_score
-            
-            if score > best_score:
-                best_match = state
-                best_score = score
-        
-        if best_match and best_score >= self.config.similarity_threshold:
-            logger.debug(f"Hierarchical match (score: {best_score:.3f})")
-            
-            value = best_match.value
-            if self.compressor:
-                value = self.compressor.decompress(value)
-            
-            return value
-        
-        return None
+        """Check semantic cache for similar inputs - delegates to CacheManager"""
+        return self.cache_manager.get(input_str)
     
     def _store_result(self, input_str: str, result: Any, cache_key: str):
-        """Store result in semantic cache"""
-        
-        # Compress if enabled
-        value_to_store = result
-        if self.compressor:
-            value_to_store = self.compressor.compress(result)
-        
-        # Generate embedding
-        if self.config.enable_hierarchical:
-            h_emb = self.hierarchical_gen.generate(input_str)
-            embedding = h_emb.full_embedding
-            self._hierarchical_cache[cache_key] = h_emb
-        else:
-            embedding = self.base_embedding_gen.generate(input_str)
-        
-        # Store
-        self.semantic_store.put(
-            key=cache_key,
-            value=value_to_store,
-            embedding=embedding,
-            ttl=self.config.cache_ttl,
-            metadata={
-                "stored_at": time.time(),
-                "hierarchical": self.config.enable_hierarchical,
-                "compressed": self.config.enable_compression
-            }
-        )
-        
+        """Store result in semantic cache - delegates to CacheManager"""
+        self.cache_manager.put(input_str, result, ttl=self.config.cache_ttl)
         logger.debug(f"Stored result in cache: {cache_key[:16]}...")
 
     # ========================================================================
@@ -331,7 +278,7 @@ class EnhancedLangChain(BaseAdapter):
     
     def get_metrics(self) -> Dict[str, Any]:
         """Get performance metrics"""
-        cache_stats = self.semantic_store.get_stats()
+        cache_stats = self.cache_manager.get_stats()
         exec_stats = self.metrics.get_stats()
         
         return {
@@ -347,13 +294,11 @@ class EnhancedLangChain(BaseAdapter):
     def invalidate_cache(self, query: Optional[str] = None):
         """Invalidate cache entries"""
         if query is None:
-            count = self.semantic_store.invalidate()
-            self._hierarchical_cache.clear()
+            count = self.cache_manager.invalidate()
             logger.info(f"Invalidated all {count} cache entries")
         else:
             cache_key = self._generate_cache_key(self._to_string(query))
-            count = self.semantic_store.invalidate(cache_key)
-            self._hierarchical_cache.pop(cache_key, None)
+            count = self.cache_manager.invalidate(cache_key)
             logger.info(f"Invalidated {count} entries for query")
 
     # Proxy other methods to underlying chain

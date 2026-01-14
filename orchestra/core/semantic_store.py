@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pickle
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -131,6 +132,8 @@ class SemanticStore:
             "total_stored": 0,
         }
         
+        self._lock = threading.Lock()
+        
         logger.info(f"Initialized SemanticStore (dim={dimension}, threshold={similarity_threshold})")
     
     def search(
@@ -140,11 +143,12 @@ class SemanticStore:
         min_similarity: Optional[float] = None
     ) -> List[Tuple[CachedState, float]]:
         """Search for similar cached states."""
-        self.stats["total_queries"] += 1
-        
-        if self.index.ntotal == 0:
-            self.stats["cache_misses"] += 1
-            return []
+        with self._lock:
+            self.stats["total_queries"] += 1
+            
+            if self.index.ntotal == 0:
+                self.stats["cache_misses"] += 1
+                return []
         
         threshold = min_similarity if min_similarity is not None else self.similarity_threshold
         
@@ -201,8 +205,9 @@ class SemanticStore:
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """Store a state."""
-        if len(self.states) >= self.max_cache_size:
-            self._evict_oldest()
+        with self._lock:
+            if len(self.states) >= self.max_cache_size:
+                self._evict_oldest()
         
         # Normalize
         emb_norm = embedding / np.linalg.norm(embedding)
@@ -225,12 +230,14 @@ class SemanticStore:
     
     def invalidate(self, key: Optional[str] = None) -> int:
         """Invalidate states."""
-        if key is None:
-            count = len(self.states)
-            self.index.reset()
-            self.states.clear()
-            logger.info(f"Invalidated all {count}")
-            return count
+        with self._lock:
+            if key is None:
+                count = len(self.states)
+                self.index.reset()
+                self.states.clear()
+                logger.info(f"Invalidated all {count}")
+                return count
+
         
         count = 0
         for state in self.states:
@@ -241,7 +248,8 @@ class SemanticStore:
     
     def cleanup_expired(self) -> int:
         """Remove expired states."""
-        current_time = time.time()
+        with self._lock:
+            current_time = time.time()
         valid_states = []
         valid_embeddings = []
         
@@ -287,7 +295,8 @@ class SemanticStore:
     
     def save(self, path: str):
         """Save to disk."""
-        data = {
+        with self._lock:
+            data = {
             "states": [s.to_dict() for s in self.states],
             "stats": self.stats,
             "config": {
@@ -329,7 +338,8 @@ class SemanticStore:
             self.index.add(embeddings_array)
 
         self.stats = data["stats"]
-        logger.info(f"Loaded {len(self.states)} states")
+        with self._lock:
+            logger.info(f"Loaded {len(self.states)} states")
 
 
 __all__ = ["SemanticStore", "CachedState"]

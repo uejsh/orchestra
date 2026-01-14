@@ -3,11 +3,11 @@
 import pytest
 import sys
 
-# Skip entire module on Windows where FAISS crashes
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="LangGraph tests require FAISS which has issues on Windows"
-)
+from tests.conftest import skip_if_no_vector_search
+
+# We no longer skip on Windows entirely because we have NumpyIndex fallback
+pytestmark = skip_if_no_vector_search
+
 
 from langgraph.graph import StateGraph, START
 from typing import TypedDict
@@ -64,7 +64,8 @@ def test_langgraph_hierarchical_option():
     enhanced = enhance(compiled, config)
     
     assert enhanced.config.enable_hierarchical == True
-    assert enhanced.hierarchical_gen is not None
+    assert enhanced.cache_manager.hierarchical_embedder is not None
+
     
     input_val = {"val": "test"}
     res = enhanced.invoke(input_val)
@@ -81,7 +82,8 @@ def test_langgraph_compression_option():
     enhanced = enhance(compiled, config)
     
     assert enhanced.config.enable_compression == True
-    assert enhanced.compressor is not None
+    assert enhanced.cache_manager.compressor is not None
+
     
     input_val = {"val": "test"}
     res = enhanced.invoke(input_val)

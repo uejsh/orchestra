@@ -7,7 +7,7 @@ setup(
     name="orchestra-llm-cache",
     version="0.1.0",
     author="Orchestra Team",
-    author_email="team@orchestra.ai",
+    author_email="hehehhdhd93@gmail.com",
     description="Reduce AI orchestration costs by 85% with semantic caching",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -32,7 +32,8 @@ setup(
     extras_require={
         "langgraph": ["langgraph>=0.2.0"],
         "langchain": ["langchain>=0.1.0"],
-        "full": ["langgraph>=0.2.0", "langchain>=0.1.0"],
+        "redis": ["redis>=5.0.0", "hiredis>=2.2.0"],
+        "full": ["langgraph>=0.2.0", "langchain>=0.1.0", "redis>=5.0.0", "hiredis>=2.2.0"],
         "dev": [
             "pytest>=7.0.0",
             "pytest-asyncio>=0.21.0",

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestra
+  labels:
+    app: orchestra
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: orchestra
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestra-metrics
+  labels:
+    app: orchestra
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+  selector:
+    app: orchestra

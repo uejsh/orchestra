@@ -3,11 +3,11 @@
 import pytest
 import sys
 
-# Skip entire module on Windows where FAISS/sentence-transformers can crash
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="LangChain tests require FAISS which has issues on Windows"
-)
+from tests.conftest import skip_if_no_vector_search
+
+# We no longer skip on Windows entirely because we have NumpyIndex fallback
+pytestmark = skip_if_no_vector_search
+
 
 from orchestra import enhance
 from orchestra.adapters.langchain import EnhancedLangChain, OrchestraLangChainConfig
@@ -77,7 +77,8 @@ def test_langchain_hierarchical_option(mock_runnable):
     enhanced = EnhancedLangChain(mock_runnable, config)
     
     assert enhanced.config.enable_hierarchical == True
-    assert enhanced.hierarchical_gen is not None
+    assert enhanced.cache_manager.hierarchical_embedder is not None
+
     
     res = enhanced.invoke("test query")
     assert res == "processed test query"
@@ -88,7 +89,8 @@ def test_langchain_compression_option(mock_runnable):
     enhanced = EnhancedLangChain(mock_runnable, config)
     
     assert enhanced.config.enable_compression == True
-    assert enhanced.compressor is not None
+    assert enhanced.cache_manager.compressor is not None
+
     
     res = enhanced.invoke("test query")
     assert res == "processed test query"

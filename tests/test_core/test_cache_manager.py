@@ -6,11 +6,11 @@ import time
 import shutil
 import tempfile
 
-# Skip on Windows where FAISS can crash
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Cache manager tests require FAISS which has issues on Windows"
-)
+from tests.conftest import skip_if_no_vector_search
+
+# We no longer skip on Windows entirely because we have NumpyIndex fallback
+pytestmark = skip_if_no_vector_search
+
 
 from orchestra.core.cache_manager import CacheManager
 

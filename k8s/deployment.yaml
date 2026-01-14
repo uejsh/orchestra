@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestra
+  labels:
+    app: orchestra
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: orchestra
+  template:
+    metadata:
+      labels:
+        app: orchestra
+    spec:
+      containers:
+      - name: orchestra
+        image: orchestra:latest
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: orchestra-secrets
+              key: redis-url
+        - name: POSTGRES_DSN
+          valueFrom:
+            secretKeyRef:
+              name: orchestra-secrets
+              key: postgres-dsn
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
