@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orchestra-llm-cache"
-version = "0.2.1"
+version = "0.2.2"
 authors = [
   { name="Orchestra Team", email="team@orchestra.ai" },
 ]

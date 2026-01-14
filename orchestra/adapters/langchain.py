@@ -40,7 +40,12 @@ class OrchestraLangChainConfig:
         llm_cost_per_1k_tokens: float = 0.03,
         
         # Backend
-        redis_url: Optional[str] = None
+        redis_url: Optional[str] = None,
+        
+        # Resilience
+        enable_circuit_breaker: bool = False,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_timeout: float = 60.0
     ):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
@@ -53,6 +58,9 @@ class OrchestraLangChainConfig:
         self.enable_compression = enable_compression
         self.llm_cost_per_1k_tokens = llm_cost_per_1k_tokens
         self.redis_url = redis_url
+        self.enable_circuit_breaker = enable_circuit_breaker
+        self.circuit_breaker_threshold = circuit_breaker_threshold
+        self.circuit_breaker_timeout = circuit_breaker_timeout
         
         # Observability
         self.enable_recorder = True
@@ -109,6 +117,17 @@ class EnhancedLangChain(BaseAdapter):
             self.recorder = None
         
         logger.info("✨ Orchestra enhancement enabled for LangChain")
+        
+        # Resilience
+        if getattr(self.config, "enable_circuit_breaker", False):
+            from ..resilience.circuit_breaker import CircuitBreaker
+            self.circuit_breaker = CircuitBreaker(
+                failure_threshold=self.config.circuit_breaker_threshold,
+                timeout=self.config.circuit_breaker_timeout
+            )
+            logger.info("🛡️ Circuit Breaker ENABLED (LangChain)")
+        else:
+            self.circuit_breaker = None
 
     def invoke(self, input: Any, config: Optional[Dict] = None, **kwargs) -> Any:
         """
@@ -153,16 +172,12 @@ class EnhancedLangChain(BaseAdapter):
             trace_id = None
 
         try:
-            # Support both Runnable .invoke() and Chain .run() / .__call__
-            if hasattr(self.chain, "invoke"):
-                result = self.chain.invoke(input, config, **kwargs)
-            elif hasattr(self.chain, "run") and isinstance(input, str):
-                result = self.chain.run(input, **kwargs)
+            if self.circuit_breaker:
+                result = self.circuit_breaker.call(
+                    self._invoke_or_run, input, config, **kwargs
+                )
             else:
-                result = self.chain(input, **kwargs)
-                if isinstance(result, dict) and len(result) == 1:
-                    # Unpack single dict result often returned by chains
-                    result = list(result.values())[0]
+                result = self._invoke_or_run(input, config, **kwargs)
             
             if trace_ctx:
                 self.recorder.finish_trace(trace_id, result, total_cost=0.0)
@@ -214,18 +229,13 @@ class EnhancedLangChain(BaseAdapter):
             trace_id = None
 
         try:
-            if hasattr(self.chain, "ainvoke"):
-                result = await self.chain.ainvoke(input, config, **kwargs)
-            elif hasattr(self.chain, "arun") and isinstance(input, str):
-                result = await self.chain.arun(input, **kwargs)
-            elif hasattr(self.chain, "acall"):
-                result = await self.chain.acall(input, **kwargs)
-                if isinstance(result, dict) and len(result) == 1:
-                    result = list(result.values())[0]
+            if self.circuit_breaker:
+                # Async Circuit Breaker call
+                result = await self.circuit_breaker.acall(
+                    self._ainvoke_or_run, input, config, **kwargs
+                )
             else:
-                # Fallback to sync invoke if async not supported
-                logger.warning("Chain does not support async invoke/run, falling back to sync.")
-                result = self.chain.invoke(input, config, **kwargs)
+                result = await self._ainvoke_or_run(input, config, **kwargs)
                 
             if trace_ctx:
                 self.recorder.finish_trace(trace_id, result, total_cost=0.0)
@@ -256,6 +266,33 @@ class EnhancedLangChain(BaseAdapter):
         """Store result in semantic cache - delegates to CacheManager"""
         self.cache_manager.put(input_str, result, ttl=self.config.cache_ttl)
         logger.debug(f"Stored result in cache: {cache_key[:16]}...")
+
+    def _invoke_or_run(self, input, config, **kwargs):
+        """Helper to unify invoke/run/call logic for sync"""
+        if hasattr(self.chain, "invoke"):
+            return self.chain.invoke(input, config, **kwargs)
+        elif hasattr(self.chain, "run") and isinstance(input, str):
+            return self.chain.run(input, **kwargs)
+        else:
+            result = self.chain(input, **kwargs)
+            if isinstance(result, dict) and len(result) == 1:
+                return list(result.values())[0]
+            return result
+
+    async def _ainvoke_or_run(self, input, config, **kwargs):
+        """Helper to unify invoke/run/call logic for async"""
+        if hasattr(self.chain, "ainvoke"):
+            return await self.chain.ainvoke(input, config, **kwargs)
+        elif hasattr(self.chain, "arun") and isinstance(input, str):
+            return await self.chain.arun(input, **kwargs)
+        elif hasattr(self.chain, "acall"):
+            result = await self.chain.acall(input, **kwargs)
+            if isinstance(result, dict) and len(result) == 1:
+                return list(result.values())[0]
+            return result
+        else:
+            logger.warning("Chain does not support async invoke/run, falling back to sync.")
+            return self._invoke_or_run(input, config, **kwargs)
 
     # ========================================================================
     # UTILITIES

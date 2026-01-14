@@ -69,6 +69,13 @@ class OrchestraRecorder:
         
         if self.use_background:
             self.worker = BackgroundStorageWorker(self.storage)
+            # Integrate with Lifecycle Manager for graceful shutdown
+            try:
+                from ..lifecycle import register_shutdown_handler
+                register_shutdown_handler(self.worker.stop)
+                logger.debug("Registered recorder worker for graceful shutdown")
+            except ImportError:
+                logger.warning("Could not register shutdown handler (lifecycle module missing)")
         else:
             self.worker = None
 

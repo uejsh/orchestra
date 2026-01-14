@@ -49,7 +49,12 @@ class OrchestraConfig:
         redis_url: Optional[str] = None,  # e.g., "redis://localhost:6379"
         
         # Observability
-        enable_recorder: bool = True
+        enable_recorder: bool = True,
+        
+        # Resilience
+        enable_circuit_breaker: bool = False,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_timeout: float = 60.0
     ):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
@@ -65,6 +70,9 @@ class OrchestraConfig:
         self.cleanup_interval = cleanup_interval
         self.redis_url = redis_url
         self.enable_recorder = enable_recorder
+        self.enable_circuit_breaker = enable_circuit_breaker
+        self.circuit_breaker_threshold = circuit_breaker_threshold
+        self.circuit_breaker_timeout = circuit_breaker_timeout
 
 
 class EnhancedLangGraph:
@@ -127,6 +135,17 @@ class EnhancedLangGraph:
             self.recorder = None
         
         logger.info("✨ Orchestra enhancement enabled for LangGraph")
+        
+        # Resilience
+        if self.config.enable_circuit_breaker:
+            from ..resilience.circuit_breaker import CircuitBreaker
+            self.circuit_breaker = CircuitBreaker(
+                failure_threshold=self.config.circuit_breaker_threshold,
+                timeout=self.config.circuit_breaker_timeout
+            )
+            logger.info("🛡️ Circuit Breaker ENABLED")
+        else:
+            self.circuit_breaker = None
     
     def invoke(
         self,
@@ -189,14 +208,25 @@ class EnhancedLangGraph:
             # Use streaming-based execution for node-level observability
             with self.recorder.trace(input_params=input, metadata={"cached": False, "adapter": "langgraph"}) as trace_id:
                 try:
-                    result = self._invoke_with_node_recording(input, config, trace_id, **kwargs)
+                    if self.circuit_breaker:
+                        # Wrap the specialized node recording method
+                        result = self.circuit_breaker.call(
+                            self._invoke_with_node_recording,
+                            input, config, trace_id, **kwargs
+                        )
+                    else:
+                        result = self._invoke_with_node_recording(input, config, trace_id, **kwargs)
+                        
                     self.recorder.finish_trace(trace_id, result, total_cost=0.0)
                 except Exception as e:
                     # trace context manager handles error status, but we might want to log
                     logger.error(f"Error during graph execution: {e}")
                     raise e
         else:
-            result = self.graph.invoke(input, config, **kwargs)
+            if self.circuit_breaker:
+                result = self.circuit_breaker.call(self.graph.invoke, input, config, **kwargs)
+            else:
+                result = self.graph.invoke(input, config, **kwargs)
 
         
         execution_time = time.time() - start_time
@@ -502,6 +532,11 @@ class EnhancedLangGraph:
         return {
             "cache": self.cache_manager.get_stats(),
             "execution": self.metrics.get_stats(),
+            "circuit_breaker": {
+                "enabled": self.config.enable_circuit_breaker,
+                "status": self.circuit_breaker.state.value if self.circuit_breaker else "disabled",
+                "failures": self.circuit_breaker.failure_count if self.circuit_breaker else 0
+            },
             "config": {
                 "similarity_threshold": self.config.similarity_threshold,
                 "cache_ttl": self.config.cache_ttl,

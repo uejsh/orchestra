@@ -94,6 +94,12 @@ def main():
     # trace prune
     prune_parser = trace_subs.add_parser("prune", help="Prune old traces")
     prune_parser.add_argument("--days", type=int, default=30, help="Days to keep")
+
+    # eval
+    eval_parser = subparsers.add_parser("eval", help="Semantic comparison")
+    eval_parser.add_argument("actual", help="Actual string")
+    eval_parser.add_argument("expected", help="Expected string")
+    eval_parser.add_argument("--threshold", type=float, default=0.92, help="Similarity threshold")
     
     args = parser.parse_args()
     
@@ -108,6 +114,17 @@ def main():
             cli.prune_traces(days=args.days)
         else:
             trace_parser.print_help()
+    elif args.command == "eval":
+        try:
+            from .eval import FuzzyAssert
+            success = FuzzyAssert.similar(args.actual, args.expected, threshold=args.threshold)
+            print("✅ PASS: Strings are semantically similar")
+        except ImportError:
+            print("❌ ERROR: sentence-transformers not installed.")
+            sys.exit(1)
+        except AssertionError as e:
+            print(f"❌ FAIL: {e}")
+            sys.exit(1)
     else:
         parser.print_help()
 

@@ -1,1 +1,3 @@
-# __init__.py - Orchestra Resilience Module
+from .circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
+
+__all__ = ["CircuitBreaker", "CircuitBreakerOpenError"]

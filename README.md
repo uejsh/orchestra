@@ -108,13 +108,89 @@ config = OrchestraConfig(enable_compression=True)
 
 ### 4. 🔗 Redis Stack (Production)
 For distributed environments, use Redis Stack as a backend. This leverages Redis's native vector search capabilities.
-
 ```python
 # Requires: Redis Stack (with RediSearch)
 config = OrchestraConfig(redis_url="redis://localhost:6379")
 ```
 
 ---
+
+## 🏭 Production Deployment
+
+Orchestra is designed to scale with you. While the default SQLite/NumPy backend is perfect for development, you should switch to robust shared backends for production.
+
+### 1. Centralized Tracing (PostgreSQL)
+To persist traces in a central database instead of a local file, initialize the recorder with `PostgresStorage`.
+
+```python
+from orchestra.recorder import OrchestraRecorder, PostgresStorage
+import os
+
+# Initialize ONCE at application startup
+OrchestraRecorder(
+    storage=PostgresStorage(
+        dsn=os.getenv("DATABASE_URL"),
+        pool_size=20
+    )
+)
+
+# Then use enhance() as normal
+graph = enhance(graph)
+```
+
+### 2. Distributed Cache (Redis)
+Ensure all your instances share the same semantic cache.
+
+```python
+config = OrchestraConfig(
+    redis_url=os.getenv("REDIS_URL"), # e.g. "redis://utils-cache:6379"
+    enable_compression=True           # Recommended for Redis to save network I/O
+)
+```
+
+### 3. Graceful Shutdown
+Orchestra includes a lifecycle manager that ensures background workers flush their data before the app exits. This works automatically on `SIGTERM` / `SIGINT`.
+
+---
+
+## 🛡️ Resilience & Reliability
+
+Orchestra includes built-in patterns to protect your application from LLM failures.
+
+### Circuit Breaker
+Prevent cascading failures when your LLM provider is down or experiencing high latency. The circuit breaker will "open" (fail fast) after a threshold of errors, giving the downstream system time to recover.
+
+```python
+config = OrchestraConfig(
+    enable_circuit_breaker=True,
+    circuit_breaker_threshold=5,  # Open after 5 failures
+    circuit_breaker_timeout=60.0  # Wait 60s before retrying
+)
+```
+
+If the circuit is open, `enhance()`'d objects will raise a `CircuitBreakerOpenError` immediately without calling the LLM. **Cache hits will still be returned even if the circuit is open.**
+
+## 🧪 Evaluation & Testing
+
+Orchestra enables **Semantic Regression Testing**. You can write tests that assert LLM outputs are "semantically similar" to a baseline, without requiring exact string matches.
+
+```python
+from orchestra.eval import FuzzyAssert
+
+# 1. Define expectations
+expected = "The user has 3 active accounts."
+actual = agent_output # e.g., "User currently holds three open accounts."
+
+# 2. Fuzzy Assertion
+# Passes if meaning is preserved (Cosine Sim > 0.92)
+FuzzyAssert.similar(actual, expected)
+
+# 3. Guardrails (Negation)
+# Passes if meaning is DIFFERENT (Cosine Sim < 0.6)
+FuzzyAssert.not_similar(actual, "I cannot help with that", threshold=0.6)
+```
+
+**Note:** This feature requires `sentence-transformers` installed (`pip install sentence-transformers`).
 
 ## 🎥 Orchestra Recorder & CLI
 
@@ -131,7 +207,12 @@ Debug your agents locally with built-in tracing. Works automatically for LangGra
    ```
 4. **Cleanup old traces**:
    ```bash
+   ```bash
    python -m orchestra.cli trace prune --days 30
+   ```
+5. **Quick Eval Check**:
+   ```bash
+   python -m orchestra.cli eval "Text A" "Text B"
    ```
 
 ---
@@ -146,6 +227,11 @@ Debug your agents locally with built-in tracing. Works automatically for LangGra
 | `max_cache_size` | `10000` | Max entries before oldest are evicted. |
 | `redis_url` | `None` | URL for Redis Stack backend. |
 | `enable_compression` | `False` | Enable zlib compression for states. |
+| `enable_circuit_breaker` | `False` | Enable resilience pattern. |
+| `circuit_breaker_threshold` | `5` | Failures before opening circuit. |
+| `circuit_breaker_timeout` | `60.0` | Seconds to wait before retrying (Half-Open). |
+| `auto_cleanup` | `True` | Automatically remove expired items. |
+| `llm_cost_per_1k_tokens` | `0.03` | Cost factor for metrics estimation. |
 
 ---
 
