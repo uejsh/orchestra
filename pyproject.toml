@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orchestra-llm-cache"
-version = "0.2.2"
+version = "0.3.0"
 authors = [
   { name="Orchestra Team", email="team@orchestra.ai" },
 ]
@@ -25,8 +25,10 @@ dependencies = [
 
 [project.optional-dependencies]
 langgraph = ["langgraph>=0.2.0"]
-langchain = ["langchain>=0.1.0"]
-full = ["langgraph>=0.2.0", "langchain>=0.1.0"]
+langchain = ["langchain>=0.1.0", "langchain-core>=0.1.0"]
+mcp = ["mcp>=1.0.0"]
+full = ["langgraph>=0.2.0", "langchain>=0.1.0", "langchain-core>=0.1.0"]
+full_mcp = ["langgraph>=0.2.0", "langchain>=0.1.0", "langchain-core>=0.1.0", "mcp>=1.0.0"]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

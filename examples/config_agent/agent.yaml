@@ -1,0 +1,21 @@
+model:
+  provider: openai
+  # Using a placeholder key for the example
+  # In production, use ${OPENAI_API_KEY}
+  api_key: sk-proj-1234567890abcdef1234567890abcdef
+  name: gpt-4o
+  temperature: 0.0
+
+# Using valid npx commands for public MCP servers
+mcp_servers:
+  - command: npx
+    args: 
+      - -y
+      - "@anthropic/mcp-server-git"
+      - --repository
+      - "."
+
+orchestra:
+  tool_search: true
+  top_k: 3
+  context_threshold: 0.10

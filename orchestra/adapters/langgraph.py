@@ -54,7 +54,14 @@ class OrchestraConfig:
         # Resilience
         enable_circuit_breaker: bool = False,
         circuit_breaker_threshold: int = 5,
-        circuit_breaker_timeout: float = 60.0
+        circuit_breaker_timeout: float = 60.0,
+        
+        # MCP Integration (Smart Tool Discovery)
+        mcp_servers: Optional[list] = None,  # List of MCPConfig or connection strings
+        enable_tool_search: bool = True,  # Like Claude's Tool Search
+        tool_search_top_k: int = 5,  # Max tools when searching
+        tool_context_threshold: float = 0.10,  # 10% of context triggers search
+        mcp_cache_ttl: int = 3600  # TTL for MCP tool responses
     ):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
@@ -73,6 +80,13 @@ class OrchestraConfig:
         self.enable_circuit_breaker = enable_circuit_breaker
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_timeout = circuit_breaker_timeout
+        
+        # MCP settings
+        self.mcp_servers = mcp_servers
+        self.enable_tool_search = enable_tool_search
+        self.tool_search_top_k = tool_search_top_k
+        self.tool_context_threshold = tool_context_threshold
+        self.mcp_cache_ttl = mcp_cache_ttl
 
 
 class EnhancedLangGraph:

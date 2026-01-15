@@ -1,0 +1,16 @@
+model:
+  provider: openai
+  api_key: sk-mock-key
+  name: gpt-4o
+
+mcp_servers:
+  - name: mock-db
+    command: echo
+    args: ["mock-db-server"]
+    
+  - name: mock-git
+    command: echo 
+    args: ["mock-git-server"]
+
+orchestra:
+  tool_search: true

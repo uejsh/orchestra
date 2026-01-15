@@ -101,8 +101,93 @@ def main():
     eval_parser.add_argument("expected", help="Expected string")
     eval_parser.add_argument("--threshold", type=float, default=0.92, help="Similarity threshold")
     
+    # run (NEW)
+    run_parser = subparsers.add_parser("run", help="Run a declarative agent")
+    run_parser.add_argument("config", help="Path to agent.yaml config file")
+    run_parser.add_argument("--query", "-q", help="Initial query to run")
+    run_parser.add_argument("--context", "-c", help="Additional system context")
+    run_parser.add_argument("--servers", "-s", help="Comma-separated list of servers to use")
+    run_parser.add_argument("--interactive", "-i", action="store_true", help="Interactive chat mode")
+
     args = parser.parse_args()
     
+    if args.command == "run":
+        import asyncio
+        from .agent import AgentBuilder
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        async def run_agent():
+            print(f"🏗️  Building agent from {args.config}...")
+            try:
+                builder = AgentBuilder.from_file(args.config)
+                
+                # Context Override
+                if args.context:
+                    current = builder.config.system_context or ""
+                    builder.config.system_context = f"{current}\n\n{args.context}".strip()
+                
+                # Server Allowlist
+                allowlist = args.servers.split(",") if args.servers else None
+                if allowlist:
+                    allowlist = [s.strip() for s in allowlist]
+                    print(f"🎯 Selected servers: {allowlist}")
+                    
+                agent = await builder.build(server_allowlist=allowlist)
+                print("✅ Agent ready.")
+                
+                messages = []
+                
+                # Add System Message if configured
+                # Note: We manually insert it into history if builder has it
+                if builder.config.system_context:
+                    messages.append(SystemMessage(content=builder.config.system_context))
+                
+                # Interactive Mode
+                if args.interactive:
+                    print("\n💬 Entering Interactive Mode (Ctrl+C to exit)\n")
+                    while True:
+                        try:
+                            q = input("User> ")
+                            if not q.strip(): continue
+                        except KeyboardInterrupt:
+                            print("\nExiting...")
+                            break
+                            
+                        # Run
+                        messages.append(HumanMessage(content=q))
+                        print("🤖 Thinking...", end="", flush=True)
+                        
+                        response = await agent.ainvoke({"messages": messages})
+                        
+                        # Fix: LangGraph returns full state, we want the last message
+                        last_msg = response["messages"][-1]
+                        content = last_msg.content
+                        if isinstance(content, list): # Multi-modal or blocks
+                             content = "".join([c["text"] for c in content if "text" in c])
+                             
+                        print(f"\rAgent> {content}\n")
+                        messages = response["messages"] # Update history
+                        
+                # Single Query Mode
+                elif args.query:
+                    messages.append(HumanMessage(content=args.query))
+                    print(f"User> {args.query}")
+                    print("🤖 Thinking...")
+                    
+                    response = await agent.ainvoke({"messages": messages})
+                    last_msg = response["messages"][-1]
+                    print(f"Agent> {last_msg.content}")
+                else:
+                    print("❌ Please provide --query or --interactive")
+                    
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        asyncio.run(run_agent())
+        return
+
     cli = OrchestraCLI()
     
     if args.command == "trace":

@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/orchestra-llm-cache.svg)](https://pypi.org/project/orchestra-llm-cache/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Orchestra adds intelligent **semantic caching** to LangGraph, LangChain, and other AI frameworks - **without changing your code**. It understands the *meaning* of your requests, allowing it to reuse results even for slightly different phrasing.
+Orchestra adds intelligent **semantic caching** to LangGraph, LangChain, and other AI frameworks. It understands the *meaning* of your requests, allowing it to reuse results even for slightly different phrasing (e.g., "Summarize Q3" vs "Give me a summary of the third quarter").
 
 ---
 
@@ -14,263 +14,279 @@ Orchestra adds intelligent **semantic caching** to LangGraph, LangChain, and oth
 
 - **Extreme Cost Savings**: Stop paying for semantically identical LLM calls.
 - **Lightning Performance**: Sub-second responses (<0.5s) for cached results.
-- **Zero-Code Integration**: Wrap your existing LangGraph or LangChain objects in one line.
-- **Production-Ready**: Built-in support for Redis, thread-safety, and compression.
-- **Local Debugging**: Beautiful trace inspection via the CLI, no cloud needed.
+- **Zero-Code Integration**: Wrap your existing LangGraph or LangChain objects in **one line**.
+- **Enterprise Ready**: Full support for **PostgreSQL**, **Redis Stack**, and **Circuit Breakers**.
+- **Smart Tool Discovery**: Automatically filters MCP tools to save context tokens (like Claude's Tool Search).
 
 | Feature | Orchestra | Standard Cache |
 |---------|-----------|----------------|
-| **Matching** | Semantic (Meaning) | Exact String Match |
-| **Storage** | Local/Redis Stack | Local Memory |
-| **Compression** | Hierarchical (90% reduction) | None |
-| **Observability** | CLI Tracing | Logging |
+| **Matching** | Semantic (Embeddings + Cosine) | Exact String Match |
+| **Storage** | Local (SQLite) / Postgres / Redis | Local Memory / Key-Value |
+| **Resilience** | Circuit Breaker (Fail Fast) | None |
+| **Observability** | Full Execution Tracing (CLI) | Basic Logging |
+| **Tooling** | Smart Discovery (Context Saving) | All Tools Always |
 
 ---
 
 ## 📦 Installation
 
 ```bash
-# Recommended: full install
+# Recommended: Full install (includes all backends)
 pip install orchestra-llm-cache[full]
 
-# Framework specific
-pip install orchestra-llm-cache[langgraph]
-pip install orchestra-llm-cache[langchain]
+# ----------------- Modular Installs -----------------
+
+# Just the core (SQLite only)
+pip install orchestra-llm-cache
+
+# With Postgres support
+pip install orchestra-llm-cache[postgres]
+
+# With Redis support
+pip install orchestra-llm-cache[redis]
+
+# With MCP support
+pip install orchestra-llm-cache[mcp]
 ```
 
 ---
 
 ## ⚡ Quick Start
 
-### With LangGraph
-
+### 1. With LangGraph
 ```python
-from langgraph.graph import StateGraph, START
+from langgraph.graph import StateGraph
 from orchestra import enhance
 
 # 1. Define your graph normally
 graph = StateGraph(State)
-graph.add_node("analyze", analyze_node)
-graph.add_edge(START, "analyze")
+# ... build your graph ...
 
 # 2. ✨ Add Orchestra (ONE LINE)
-graph = enhance(graph.compile())
+# This automatically wraps nodes with caching & tracing
+cached_graph = enhance(graph.compile())
 
-# 3. Use normally - caching happens automatically
-result = graph.invoke({"query": "Analyze sales data"})
+# 3. Use normally
+result = cached_graph.invoke({"query": "Analyze sales data"})
 ```
 
-### With LangChain
-
+### 2. With LangChain
 ```python
 from langchain.chains import LLMChain
 from orchestra import enhance
 
 chain = LLMChain(llm=llm, prompt=prompt)
-chain = enhance(chain)  # ✨ Add semantic caching
+cached_chain = enhance(chain) 
 
-# Same API, now cached
-result = chain.run("Show me Q4 trends")
+result = cached_chain.run("Show me Q4 trends")
 ```
 
 ---
 
-## 🛠️ Advanced Features
+## 🧠 Deep Dive: Semantic Caching
 
-### 1. 🔍 Hierarchical Embeddings
-Standard semantic caching looks at the whole query. For long or complex queries, Orchestra can split the input into chunks and match both the **full context** and the **individual concepts**.
+Orchestra doesn't just look for exact string matches. It uses **embedding models** (default: `all-MiniLM-L6-v2`) to convert input states into vectors.
+
+1.  **Input**: "What is the capital of France?"
+2.  **Embedding**: `[0.12, -0.45, 0.88, ...]`
+3.  **Search**: Finds nearest neighbor in DB.
+4.  **Match**: Found "Capital of France" (Similarity: 0.98).
+5.  **Action**: Return cached result instantly.
+
+### Tuning Sensitivity
+You can control how "loose" or "strict" the matching is:
 
 ```python
 from orchestra import OrchestraConfig
 
 config = OrchestraConfig(
-    enable_hierarchical=True,
-    hierarchical_weight_l1=0.6, # Weight for full query
-    hierarchical_weight_l2=0.4  # Weight for sub-concepts
+    # 0.99 = Exact match only
+    # 0.90 = Very similar (Recommended)
+    # 0.75 = Loosely related
+    similarity_threshold=0.92 
 )
 graph = enhance(graph, config=config)
 ```
 
-### 2. ⏳ Time Windows (Freshness)
-Some data is only relevant for a specific time (e.g., "Current stock price"). Orchestra allows you to ignore cache hits older than a certain window.
-
-```python
-# Only use cache if it was stored in the last 10 minutes
-result = graph.invoke(input, time_window_seconds=600)
-```
-
-### 3. 🗜️ Automatic State Compression
-Orchestra can compress large state objects using zlib before storing them, perfect for complex LangGraph states.
-
-```python
-config = OrchestraConfig(enable_compression=True)
-```
-
-### 4. 🔗 Redis Stack (Production)
-For distributed environments, use Redis Stack as a backend. This leverages Redis's native vector search capabilities.
-```python
-# Requires: Redis Stack (with RediSearch)
-config = OrchestraConfig(redis_url="redis://localhost:6379")
-```
-
 ---
 
-## 🏭 Production Deployment
+## 🛡️ Deep Dive: Resilience
 
-Orchestra is designed to scale with you. While the default SQLite/NumPy backend is perfect for development, you should switch to robust shared backends for production.
+Orchestra protects your application from upstream LLM failures using a **Circuit Breaker** pattern.
 
-### 1. Centralized Tracing (PostgreSQL)
-To persist traces in a central database instead of a local file, initialize the recorder with `PostgresStorage`.
-
-```python
-from orchestra.recorder import OrchestraRecorder, PostgresStorage
-import os
-
-# Initialize ONCE at application startup
-OrchestraRecorder(
-    storage=PostgresStorage(
-        dsn=os.getenv("DATABASE_URL"),
-        pool_size=20
-    )
-)
-
-# Then use enhance() as normal
-graph = enhance(graph)
-```
-
-### 2. Distributed Cache (Redis)
-Ensure all your instances share the same semantic cache.
-
-```python
-config = OrchestraConfig(
-    redis_url=os.getenv("REDIS_URL"), # e.g. "redis://utils-cache:6379"
-    enable_compression=True           # Recommended for Redis to save network I/O
-)
-```
-
-### 3. Graceful Shutdown
-Orchestra includes a lifecycle manager that ensures background workers flush their data before the app exits. This works automatically on `SIGTERM` / `SIGINT`.
-
----
-
-## 🛡️ Resilience & Reliability
-
-Orchestra includes built-in patterns to protect your application from LLM failures.
-
-### Circuit Breaker
-Prevent cascading failures when your LLM provider is down or experiencing high latency. The circuit breaker will "open" (fail fast) after a threshold of errors, giving the downstream system time to recover.
+### Circuit Breaker States
+1.  **CLOSED** (Normal): Requests go through to the LLM.
+2.  **OPEN** (Failure): After `circuit_breaker_threshold` failures, the circuit opens. **All LLM calls fail immediately** without waiting, allowing your app to degrade gracefully or switch providers.
+3.  **HALF-OPEN** (Recovery): After `circuit_breaker_timeout`, one request is allowed through. If it succeeds, the circuit closes.
 
 ```python
 config = OrchestraConfig(
     enable_circuit_breaker=True,
-    circuit_breaker_threshold=5,  # Open after 5 failures
-    circuit_breaker_timeout=60.0  # Wait 60s before retrying
+    circuit_breaker_threshold=5,  # Open after 5 consecutive errors
+    circuit_breaker_timeout=60.0  # Wait 60s before trying again
 )
 ```
 
-If the circuit is open, `enhance()`'d objects will raise a `CircuitBreakerOpenError` immediately without calling the LLM. **Cache hits will still be returned even if the circuit is open.**
+> **Note**: Cache hits are **always returned**, even if the circuit is OPEN. This ensures your app remains partially functional during outages.
 
-## 🧪 Evaluation & Testing
+---
 
-Orchestra enables **Semantic Regression Testing**. You can write tests that assert LLM outputs are "semantically similar" to a baseline, without requiring exact string matches.
+## 💾 Deep Dive: Storage Backends
+
+### 1. SQLite (Default)
+Best for: **Local Development**, **Single Agent**.
+Files are stored in `.orchestra/traces.db` in your working directory. No setup required.
+
+### 2. PostgreSQL (Production)
+Best for: **Centralized Tracing**, **Analytics**.
+Uses connection pooling for high performance.
 
 ```python
-from orchestra.eval import FuzzyAssert
+from orchestra.recorder import OrchestraRecorder, PostgresStorage
 
-# 1. Define expectations
-expected = "The user has 3 active accounts."
-actual = agent_output # e.g., "User currently holds three open accounts."
-
-# 2. Fuzzy Assertion
-# Passes if meaning is preserved (Cosine Sim > 0.92)
-FuzzyAssert.similar(actual, expected)
-
-# 3. Guardrails (Negation)
-# Passes if meaning is DIFFERENT (Cosine Sim < 0.6)
-FuzzyAssert.not_similar(actual, "I cannot help with that", threshold=0.6)
+# Initialize generic recorder globally
+recorder = OrchestraRecorder(
+    storage=PostgresStorage(
+        dsn="postgresql://user:pass@localhost:5432/mydb",
+        pool_size=20
+    )
+)
 ```
 
-**Note:** This feature requires `sentence-transformers` installed (`pip install sentence-transformers`).
+### 3. Redis Stack (Distributed)
+Best for: **Shared Cache**, **Kubernetes**.
+Uses Redis Vector Search for millisecond-latency semantic lookups across multiple agent instances.
+
+```python
+config = OrchestraConfig(
+    redis_url="redis://localhost:6379",
+    # Enable compression to save Redis RAM/Network
+    enable_compression=True 
+)
+```
+
+---
+
+## 🔌 Deep Dive: MCP & Smart Tool Discovery
+
+When using the **Model Context Protocol (MCP)**, connecting to multiple servers (GitHub, Linear, Slack) can load 50+ tools into your context window. This makes agents slow, expensive, and confused.
+
+Orchestra's **Smart Tool Discovery** fixes this by dynamically selecting only the relevant tools.
+
+### How it works
+1.  **Index**: All tools from all MCP servers are indexed semantically.
+2.  **Search**: When the user query arrives, Orchestra searches for the top K relevant tools.
+3.  **Filter**: Only those tools are injected into the context.
+
+```python
+from orchestra.mcp import MCPClient, MCPConfig, MCPToolRegistry
+
+# 1. Connect Clients
+gh_client = MCPClient(MCPConfig(command="npx", args=["-y", "@modelcontextprotocol/server-github"]))
+
+# 2. Create Registry & Index
+registry = MCPToolRegistry([gh_client])
+await registry.index()
+
+# 3. Use in Agent
+# If query is "Find issues", this returns ONLY issue-related tools
+relevant = registry.find_relevant_tools("Find issues about login", top_k=3)
+```
+
+**Configuration**:
+```python
+config = OrchestraConfig(
+    enable_tool_search=True,
+    tool_search_top_k=5,         # Max tools to show
+    tool_context_threshold=0.10  # Only search if tools take > 10% of window
+)
+```
+
+---
 
 ## 🎥 Orchestra Recorder & CLI
 
-Debug your agents locally with built-in tracing. Works automatically for LangGraph nodes and LangChain calls.
+Orchestra records every step, input, output, and cost of your agent execution.
 
-1. **Run your code** (traces are saved to `orchestra_traces.db` locally).
-2. **List traces**:
-   ```bash
-   python -m orchestra.cli trace ls
-   ```
-3. **Inspect a specific trace**:
-   ```bash
-   python -m orchestra.cli trace view <TRACE_ID>
-   ```
-4. **Cleanup old traces**:
-   ```bash
-   ```bash
-   python -m orchestra.cli trace prune --days 30
-   ```
-5. **Quick Eval Check**:
-   ```bash
-   python -m orchestra.cli eval "Text A" "Text B"
-   ```
+### CLI Reference
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `trace ls` | `python -m orchestra.cli trace ls --limit 5` | List recent traces. |
+| `trace view` | `python -m orchestra.cli trace view <ID>` | View details of a specific trace. |
+| `trace prune` | `python -m orchestra.cli trace prune --days 7` | Delete traces older than X days. |
+| `eval` | `python -m orchestra.cli eval "A" "B"` | Check if two strings are similar. |
+| `run` | `python -m orchestra.cli run agent.yaml -i` | Run an agent interactively. |
 
 ---
 
 ## ⚙️ Configuration Reference
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `similarity_threshold` | `0.92` | How similar queries must be (0-1). |
-| `embedding_model` | `all-MiniLM-L6-v2` | Sentence transformer model to use. |
-| `cache_ttl` | `3600` | How long entries stay in cache (seconds). |
-| `max_cache_size` | `10000` | Max entries before oldest are evicted. |
-| `redis_url` | `None` | URL for Redis Stack backend. |
-| `enable_compression` | `False` | Enable zlib compression for states. |
-| `enable_circuit_breaker` | `False` | Enable resilience pattern. |
-| `circuit_breaker_threshold` | `5` | Failures before opening circuit. |
-| `circuit_breaker_timeout` | `60.0` | Seconds to wait before retrying (Half-Open). |
-| `auto_cleanup` | `True` | Automatically remove expired items. |
-| `llm_cost_per_1k_tokens` | `0.03` | Cost factor for metrics estimation. |
+### `OrchestraConfig`
 
----
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `similarity_threshold` | float | `0.92` | Matching strictness (0.0 - 1.0). |
+| `embedding_model` | str | `all-MiniLM-L6-v2` | HuggingFace model name. |
+| `cache_ttl` | int | `3600` | Cache expiry in seconds. |
+| `max_cache_size` | int | `10000` | Max entries in local memory. |
+| `redis_url` | str | `None` | Connection string for Redis. |
+| `enable_compression` | bool | `False` | Gzip large states before storage. |
+| `enable_circuit_breaker` | bool | `False` | Activate resilience pattern. |
+| `circuit_breaker_threshold` | int | `5` | Failures before opening circuit. |
+| `circuit_breaker_timeout` | float | `60.0` | Recovery timeout (seconds). |
+| `tool_search_top_k` | int | `5` | Max tools for Smart Discovery. |
+| `mcp_cache_ttl` | int | `3600` | How long to cache MCP tool lists. |
 
-## ❓ Troubleshooting & FAQ
+### `agent.yaml` Structure
 
-### **FAISS Issues on Windows**
-FAISS can sometimes be difficult to install on Windows. Orchestra includes a **NumPy-based fallback** that works out of the box. If you see warnings about FAISS, don't worry—Orchestra is still working using the fallback index.
+For the Declarative Agent Runner (`orchestra.cli run`):
 
-### **Cache is too "loose" or too "strict"**
-Adjust the `similarity_threshold`. 
-- Increase (e.g., `0.98`) for strict matching (more accurate, fewer hits).
-- Decrease (e.g., `0.85`) for loose matching (more hits, potentially lower accuracy).
+```yaml
+model:
+  provider: anthropic
+  name: claude-3-5-sonnet-20240620
+  api_key: env:ANTHROPIC_API_KEY
 
-### **Does it work with LangGraph Cloud?**
-Orchestra is designed for self-hosted and local environments. Support for LangGraph Cloud and other managed platforms is on our roadmap.
+mcp_servers:
+  - name: github
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: "..."
 
----
-
-## 📈 Benchmarks
-
-Run the included benchmark to see savings on your workload:
-```bash
-python benchmarks/langgraph_benchmark.py --queries 100 --iterations 5
+orchestra:
+  tool_search: true
+  top_k: 5
 ```
 
 ---
 
-## 📜 License & Citation
+## 🧪 Testing & Evaluation
 
-MIT License. See [LICENSE](LICENSE) for details.
+Use `FuzzyAssert` to write tests that pass if the **meaning** is correct, even if wording differs.
 
-```bibtex
-@software{orchestra2024,
-  title={Orchestra: Semantic Caching for AI Orchestration},
-  author={Orchestra Team},
-  year={2024},
-  url={https://github.com/uejsh/orchestra}
-}
+```python
+from orchestra.eval import FuzzyAssert
+
+def test_agent_response():
+    actual = agent.invoke("Hello")
+    # Passes if response is generally a greeting
+    FuzzyAssert.similar(actual, "Hi there, how can I help?", threshold=0.8)
 ```
 
 ---
-**Built with ❤️ by the Orchestra Team**
+
+## ❓ FAQ
+
+**Q: Does this work with LangGraph Cloud?**
+A: Orchestra is optimized for self-hosted / local execution. Cloud support is on the roadmap.
+
+**Q: I get FAISS errors on Windows.**
+A: Orchestra transparently falls back to a NumPy implementation if FAISS fails. You can ignore these warnings.
+
+**Q: Can I use a different embedding model?**
+A: Yes, set `embedding_model` in `OrchestraConfig` to any SentenceTransformer model.
+
+---
+**Built with ❤️ for the AI Engineering Community**
