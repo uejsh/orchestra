@@ -14,6 +14,19 @@
 
 ---
 
+### 📚 Table of Contents
+- [Quick Start](#-the-1-line-setup)
+- [Performance Benchmarks](#-wall-of-impact-performance-benchmarks)
+- [Self-RAG (Collective Intelligence)](#-collective-intelligence-self-rag)
+- [Premium Features (MCP, Recorder)](#-premium-features)
+- [Configuration Reference](#-configuration-reference)
+- [Production Architecture](#-production-architecture)
+- [Multi-Agent Metrics](#-multi-agent-metrics--observability)
+- [CLI Reference](#-recorder--cli-reference)
+- [FAQ](#-faq)
+
+---
+
 ## 📈 Wall of Impact: Performance Benchmarks
 
 In tests across 10,000+ real-world agent interactions, Orchestra has proven its dominance in cost-efficiency and speed.
@@ -114,6 +127,7 @@ result = agent.invoke("Tell me the project status")
 - **🎥 Time-Travel Debugging**: Trace every state mutation, diff, and LLM call exactly as it happened with the Orchestra CLI.
 - **🛡️ Outage Insurance**: Don't let an OpenAI or Anthropic outage kill your production agents. Circuit breakers detect failures in real-time.
 - **🗜️ Adaptive Compression**: Automatically compresses large cached results to minimize storage footprint in Redis/SQLite.
+- **🔬 Hierarchical Matching**: Better deduplication for complex prompts by matching both the whole query and its sub-chunks.
 
 ---
 
@@ -127,16 +141,23 @@ result = agent.invoke("Tell me the project status")
 | `similarity_threshold` | `float` | `0.92` | Cosine similarity (0-1) for a cache hit. |
 | `embedding_model` | `str` | `"all-MiniLM-L6-v2"`| SentenceTransformer model to use. |
 | `enable_hierarchical` | `bool` | `False` | L1 + L2 matching (better for long queries). |
+| `hierarchical_weight_l1`| `float` | `0.6` | Weight for full-query similarity. |
+| `hierarchical_weight_l2`| `float` | `0.4` | Weight for chunk-level similarity. |
 | **Caching & Persistence** | | | |
 | `enable_cache` | `bool` | `True` | Master switch for semantic caching. |
 | `cache_ttl` | `int` | `3600` | Expiration time in seconds. |
 | `redis_url`| `str` | `None` | Redis Stack URL for shared caching. |
+| `enable_compression` | `bool` | `False` | Zlib compression for large values. |
 | **Self-RAG (Context Injection)** | | | |
 | `enable_context_injection`| `bool` | `False` | Inject similar past results as context. |
 | `context_injection_top_k`| `int` | `3` | Number of past matches to inject. |
+| **Observability** | | | |
+| `enable_recorder` | `bool` | `True` | Enables step-by-step trace logging. |
+| `llm_cost_per_1k_tokens`| `float` | `0.03` | Basis for cost savings estimation. |
 | **Resilience & Tools** | | | |
 | `enable_circuit_breaker`| `bool` | `False` | Prevent provider-timeout cascades. |
 | `enable_tool_search` | `bool` | `True` | Dynamic tool pruning (Smart Tools). |
+| `mcp_servers` | `list` | `None` | List of MCP host configurations. |
 
 ---
 
@@ -163,6 +184,24 @@ agent = enhance(graph)
 
 ---
 
+## 📊 Multi-Agent Metrics & Observability
+
+Orchestra's metrics engine tracks performance in real-time across your entire agent network.
+
+- **Global Aggregation**: Enhance a Supervisor graph to capture metrics for the entire session.
+- **Granular Metrics**: Enhance specific sub-agents to track their individual efficiency.
+
+```python
+stats = agent.get_metrics()
+print(f"💰 Saved: ${stats['estimated_cost_saved']:.4f}")
+print(f"📈 Hit Rate: {stats['cache_hit_rate']*100:.1f}%")
+
+# Export for Grafana/ELK
+agent.export_metrics("session_stats.json")
+```
+
+---
+
 ## 🎥 Recorder & CLI Reference
 
 Inspect agent state mutations with the high-speed CLI.
@@ -176,7 +215,23 @@ python -m orchestra.cli trace view <TRACE_ID>
 
 # Semantic Eval (Great for CI/CD)
 python -m orchestra.cli eval "Hello" "Hi" --threshold 0.9
+
+# Run a declarative agent
+python -m orchestra.cli run agent.yaml --query "Hello"
 ```
+
+---
+
+## ❓ FAQ
+
+**Q: How accurate is semantic matching?**
+By default, we use a 0.92 threshold. It's high enough to ensure accuracy but loose enough to catch rephrasings.
+
+**Q: Does it support custom embeddings?**
+Yes, any `SentenceTransformer` model can be passed to `embedding_model` in `OrchestraConfig`.
+
+**Q: Is it safe for production?**
+Absolutely. We include **Circuit Breakers** and **Adaptive Compression** specifically for high-volume production loads.
 
 ---
 
