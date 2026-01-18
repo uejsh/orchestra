@@ -16,9 +16,10 @@
 ### 📚 Table of Contents
 
 - [Quick Start](#-1-line-quick-start)
-- [Feature Deep Dive](#-feature-deep-dive)
-- [Benchmarks](#-proof-of-value-benchmarking)
-- [Configuration Cookbook](#%EF%B8%8F-configuration-cookbook)
+- [Enterprise Features](#-enterprise-features)
+- [Configuration API Reference](#%EF%B8%8F-configuration-api-reference)
+- [Production Architecture (Redis/Postgres)](#-production-architecture)
+- [Multi-Agent Metrics & Observability](#-multi-agent-metrics--observability)
 - [CLI Reference](#-cli-reference)
 - [FAQ](#-faq)
 
@@ -59,26 +60,6 @@ graph TD
 
 ---
 
-## ⚡ The Orchestra Difference
-
-| Feature | ❌ Without Orchestra | ✅ With Orchestra |
-| :--- | :--- | :--- |
-| **Cost** | **$100.00** / month | **$15.00** / month (85% Saved) |
-| **Latency** | **1.5s - 5.0s** (API Calls) | **< 0.05s** (Instant Cache) |
-| **Uptime** | Fails when OpenAI is down | **99.99%** (Circuit Breakers) |
-| **Context** | 100k tokens (Full Tools) | **2k tokens** (Smart Filtering) |
-| **Debugging** | Print statements | **Time-Travel Replay** |
-
----
-
-## 📦 Installation
-
-```bash
-pip install orchestra-llm-cache[full]
-```
-
----
-
 ## ⚡ 1-Line Quick Start
 
 ### langgraph
@@ -93,199 +74,118 @@ agent = enhance(app.compile())
 result = agent.invoke({"query": "What are our Q3 goals?"})
 ```
 
-### langchain
+---
 
-```python
-from orchestra import enhance
+## 🛠️ Configuration API Reference
 
-# Works with any Runnable or Chain
-chain = enhance(my_rag_chain)
+Pass `OrchestraConfig` to `enhance()` to customize behavior.
 
-result = chain.invoke("Explain the merger")
-```
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| **Semantic Matching** | | | |
+| `similarity_threshold` | float | 0.92 | Cosine similarity required for a cache hit. |
+| `embedding_model` | str | `"all-MiniLM-L6-v2"` | SentenceTransformer model for vector generation. |
+| `enable_hierarchical` | bool | `False` | Enables L1 (Global) + L2 (Chunked) matching for high accuracy. |
+| `hierarchical_weight_l1` | float | 0.6 | Weight for whole-query match. |
+| `hierarchical_weight_l2` | float | 0.4 | Weight for individual phrase matching. |
+| **Caching & Storage** | | | |
+| `enable_cache` | bool | `True` | Master switch for semantic caching. |
+| `cache_ttl` | int | 3600 | Cache lifetime in seconds. |
+| `max_cache_size` | int | 10000 | Max entries in local store (if not using Redis). |
+| `redis_url` | str | `None` | Redis Stack connection URL for distributed caching. |
+| `enable_compression` | bool | `False` | Zlib compression for cached values. |
+| **Resilience & Tools** | | | |
+| `enable_circuit_breaker`| bool | `False` | Prevents cascading failures during outages. |
+| `circuit_breaker_threshold`| int | 5 | Failed attempts before opening circuit. |
+| `circuit_breaker_timeout`| float | 60.0 | Seconds before retrying the provider. |
+| `enable_tool_search` | bool | `True` | Dynamic tool discovery via MCP. |
+| `mcp_servers` | list | `None` | List of MCP server configs (standard MCP JSON format). |
+| **Observability** | | | |
+| `enable_recorder` | bool | `True` | Enables step-by-step trace logging. |
+| `llm_cost_per_1k_tokens`| float | 0.03 | Basis for cost savings dashboard. |
 
 ---
 
-## 🔍 Feature Deep Dive
+## 🏗️ Production Architecture
 
-### 🧠 Semantic Caching (Hierarchical)
+For production environments, move away from local SQLite/NumPy to distributed backends.
 
-Unlike basic caches, Orchestra uses a **2-Level Hierarchical Matching** system:
-
-1.  **L1 (Coarse)**: Matches the full query vector for broad similarity.
-2.  **L2 (Fine)**: Breaks text into chunks to match specific phrases, ensuring high precision even for complex prompts.
-
-### 🛡️ Enterprise Resilience (Circuit Breaker)
-
-Stop cascading failures. If your LLM provider starts timing out, Orchestra opens the circuit, failing fast and serving cached results until the provider recovers.
+### 1. Persistent Semantic Cache (Redis)
+Orchestra supports **Redis Stack** as a global semantic store.
 
 ```python
+from orchestra import enhance, OrchestraConfig
+
 config = OrchestraConfig(
-    enable_circuit_breaker=True,
-    circuit_breaker_threshold=5, 
-    circuit_breaker_timeout=60.0
-)
-```
-
-### 🔌 Smart Tool Discovery (MCP)
-
-Are you loading 50+ tools into Claude? You're burning money. Orchestra indexes your MCP tools semantically and only injects the ones relevant to the current user query.
-
-**1. Define your MCP Servers**
-
-Orchestra connects to any standard MCP server (e.g., SQLite, Brave Search, Google Maps).
-
-```python
-from orchestra.configuration import MCPConfigEntry
-
-# Define the servers you want to use
-servers = [
-    MCPConfigEntry(
-        name="sqlite-db",
-        command="uvx",
-        args=["mcp-server-sqlite", "--db-path", "./my_app.db"]
-    ),
-    MCPConfigEntry(
-        name="brave-search",
-        command="npx",
-        args=["-y", "@modelcontextprotocol/server-brave-search"],
-        env={"BRAVE_API_KEY": "YOUR_API_KEY"}
-    )
-]
-```
-
-**2. Enable Tool Search**
-
-Pass the servers to `OrchestraConfig`. Orchestra will now:
-
-1.  Connect to the servers on startup.
-2.  Index all available tools.
-3.  On every query, semantically search for the top 5 relevant tools and inject them into the LLM context.
-
-```python
-config = OrchestraConfig(
-    enable_tool_search=True,
-    tool_search_top_k=5,        # Inject only the top 5 relevant tools
-    mcp_servers=servers         # Your list of MCP servers
+    redis_url="redis://:password@your-redis-stack:6379",
+    cache_ttl=86400, # 24 hours
+    similarity_threshold=0.95
 )
 
 agent = enhance(graph, config)
 ```
 
-### 🎥 Recorder & Time-Travel
+### 2. Scalable Tracing (Postgres)
+Transition from local `.orchestra/traces.db` to a centralized PostgreSQL instance.
 
+```python
+from orchestra.recorder import OrchestraRecorder
+from orchestra.recorder.storage import PostgresStorage
+from orchestra import enhance
+
+# 1. Initialize Postgres storage
+storage = PostgresStorage(
+    dsn="postgresql://user:pass@localhost:5432/orchestra_db",
+    pool_size=20
+)
+
+# 2. Override the global recorder instance
+OrchestraRecorder._instance = OrchestraRecorder(storage=storage)
+
+# 3. Enhance your graph
+agent = enhance(graph)
+```
+
+---
+
+## 📊 Multi-Agent Metrics & Observability
+
+Orchestra's metrics engine tracks performance in real-time.
+
+### Does it work for multi-agent graphs?
+**Yes.**
+
+1.  **Global Aggregation**: If you enhance a Supervisor or entry-point graph, Orchestra captures metrics for the entire session, including all sub-calls to other agents.
+2.  **Granular Metrics**: To track a specific agent's efficiency within a swarm, simply `enhance()` that specific agent's graph.
+
+### Accessing Metrics
+```python
+stats = agent.get_metrics()
+
+print(f"💰 Total Saved: ${stats['estimated_cost_saved']:.4f}")
+print(f"⚡ Avg Hit Latency: {stats['avg_cache_hit_latency']:.3f}s")
+print(f"📈 Cache Hit Rate: {stats['cache_hit_rate']*100:.1f}%")
+
+# Export for Grafana/ELK
+agent.export_metrics("session_stats.json")
+```
+
+---
+
+## 🎥 Recorder & Time-Travel
 Orchestra records every node execution, input, and output difference.
--   **SQLite**: Zero-config local tracing.
--   **PostgreSQL**: Scalable production tracing.
 
 ```bash
 # View recent executions
 python -m orchestra.cli trace ls
-```
 
----
-
-## 📊 Proof of Value: Benchmarking
-
-To prove the immense value of Orchestra, we propose running the **MMLU (Massive Multitask Language Understanding)** benchmark.
-
-### Why MMLU?
-
-MMLU covers 57 subjects across STEM, the humanities, and more. It represents a realistic, high-volume workload perfect for demonstrating:
-
-1.  **Cost Reduction**: In regression testing, ~100% of questions are repeated. Orchestra reduces the cost of running MMLU from **$X to ~$0**.
-2.  **Semantic Variation**: By perturbing MMLU questions slightly (e.g., rephrasing), we can prove that Orchestra's semantic cache still hits, unlike traditional key-value caches.
-3.  **Speed**: 
-    -   **Without Orchestra**: ~1.5s per question (API latency).
-    -   **With Orchestra**: **<0.05s** per question (Cache hit).
-
-### Micro-Benchmark Result
-
-Running a local demo `benchmark_demo.py` confirms the latency gap:
-
-| Query Type | Latency (s) | Status |
-| :--- | :--- | :--- |
-| **New Query** | 1.02s | 🔄 FETCHED |
-| **Exact Repeat** | **0.00s** | ✅ CACHED |
-| **Semantic Repeat** | **0.05s** | ✅ CACHED |
-
-*> "Repeated/Similar queries are instantaneous."*
-
----
-
-## 💾 Production Backends
-
-| Backend | Best For | Description |
-|---------|----------|-------------|
-| **SQLite** | Development | Local, file-based, zero-config. |
-| **PostgreSQL** | Tracing | Centralized telemetry for large teams. |
-| **Redis Stack** | Distributed | Global semantic cache shared across pods. |
-
----
-
-## 🛠️ Configuration Cookbook
-
-### Advanced Caching (Compression & Tuning)
-
-Reduce memory usage by 60% with compression and fine-tune semantic matching.
-
-```python
-config = OrchestraConfig(
-    # Enable Zlib compression for cached values
-    enable_compression=True,
-    
-    # Stricter matching (0.95) for critical apps
-    similarity_threshold=0.95, 
-    
-    # 2-Level matching (Vector + Keyword)
-    enable_hierarchical=True
-)
-```
-
-### Redis Backend (Distributed)
-
-Share the semantic cache across multiple pods/instances.
-
-```python
-config = OrchestraConfig(
-    redis_url="redis://localhost:6379",
-    cache_ttl=86400  # 24 hours
-)
-```
-
-### Observability & Metrics
-
-Access real-time cost savings and performance metrics programmatically.
-
-```python
-# Create enhanced agent
-agent = enhance(graph, config)
-
-# ... run some queries ...
-
-# Get metrics
-stats = agent.get_metrics()
-print(f"💰 Saved: ${stats['estimated_cost_saved']:.4f}")
-print(f"⚡ Cache Hit Rate: {stats['cache_hit_rate']*100:.1f}%")
-
-# Export to JSON for Grafana/Datadog
-agent.export_metrics("orchestra_metrics.json")
-```
-
-### Custom Embeddings
-
-Use a larger or multilingual model for better semantic understanding.
-
-```python
-config = OrchestraConfig(
-    embedding_model="all-mpnet-base-v2"  # Larger, more accurate model
-)
+# Inspect specific step-by-step state changes
+python -m orchestra.cli trace view <TRACE_ID>
 ```
 
 ---
 
 ## 💻 CLI Reference
-
 Orchestra ships with a powerful CLI for inspection and running declarative agents.
 
 ```bash
@@ -295,27 +195,23 @@ python -m orchestra.cli --help
 # 1. Trace Inspection
 python -m orchestra.cli trace ls               # List recent traces
 python -m orchestra.cli trace view <TRACE_ID>  # Inspect specific trace steps
-python -m orchestra.cli trace prune --days 7   # Clean old traces
 
 # 2. Semantic Evaluation
 # Returns exit code 0 if similar, 1 if not. Great for CI/CD.
 python -m orchestra.cli eval "Hello world" "Hi earth" --threshold 0.9
 
 # 3. Running Agents
-# Run a declarative agent from config
 python -m orchestra.cli run agent.yaml --query "Hello"
-python -m orchestra.cli run agent.yaml --interactive
 ```
 
 ---
 
 ## ❓ FAQ
+**Q: How accurate is semantic matching?**
+By default, we use a 0.92 threshold. It's high enough to ensure accuracy but loose enough to catch rephrasings.
 
-**Q: How accurate is the semantic matching?**
-By default, we use a 0.92 cosine similarity threshold. It's high enough to ensure accuracy but loose enough to catch "How's the weather?" vs "What's the weather like?".
-
-**Q: Does this work with exact matches?**
-Yes. If a query is identical, it hits the cache instantly. If it's a paraphrase, we use vector embeddings.
+**Q: Can I use custom embedding models?**
+Yes, pass any SentenceTransformer model name to `embedding_model` in `OrchestraConfig`.
 
 ---
 
