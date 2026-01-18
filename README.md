@@ -14,6 +14,18 @@
 
 ---
 
+<div align="center">
+  <img src="assets/orchestration_flow.gif" alt="Orchestra Flow" width="600">
+  <p><i>The heartbeat of high-performance agentic systems.</i></p>
+</div>
+
+---
+
+### 📺 Watch: How to drop your LLM bill by 85% instantly
+[![Orchestra Demo](https://img.youtube.com/vi/TaIGvoKuWZs/0.jpg)](https://www.youtube.com/watch?v=TaIGvoKuWZs)
+
+---
+
 ### 📚 Table of Contents
 - [🚀 Quick Start](#-the-1-line-setup)
 - [📈 Performance Benchmarks](#-wall-of-impact-performance-benchmarks)
@@ -39,6 +51,11 @@ In tests across 10,000+ real-world agent interactions, Orchestra has proven its 
 | **P99 Response Time** | ~4,200ms | **< 45ms** | **94x Faster** |
 | **Token Utilization** | 12.4M Tokens | **1.8M Tokens** | **Efficiency Gained** |
 | **Error Rate (Provider Timeout)** | 4.2% | **0.5%** | **Self-Healing** |
+
+---
+ 
+### 📺 Watch: How to drop your LLM bill by 85% instantly
+[![Orchestra Demo](https://img.youtube.com/vi/TaIGvoKuWZs/0.jpg)](https://www.youtube.com/watch?v=TaIGvoKuWZs)
 
 ---
 
