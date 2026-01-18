@@ -61,7 +61,15 @@ class OrchestraConfig:
         enable_tool_search: bool = True,  # Like Claude's Tool Search
         tool_search_top_k: int = 5,  # Max tools when searching
         tool_context_threshold: float = 0.10,  # 10% of context triggers search
-        mcp_cache_ttl: int = 3600  # TTL for MCP tool responses
+        mcp_cache_ttl: int = 3600,
+        # Semantic Context Injection (Self-RAG)
+        enable_context_injection: bool = False,
+        context_injection_top_k: int = 3,
+        context_injection_template: str = (
+            "--- START OF RELEVANT CONTEXT (PAST RESPONSES) ---\n"
+            "{context}\n"
+            "--- END OF RELEVANT CONTEXT ---"
+        )
     ):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
@@ -87,6 +95,10 @@ class OrchestraConfig:
         self.tool_search_top_k = tool_search_top_k
         self.tool_context_threshold = tool_context_threshold
         self.mcp_cache_ttl = mcp_cache_ttl
+        # Self-RAG settings
+        self.enable_context_injection = enable_context_injection
+        self.context_injection_top_k = context_injection_top_k
+        self.context_injection_template = context_injection_template
 
 
 class EnhancedLangGraph:
@@ -216,20 +228,25 @@ class EnhancedLangGraph:
         # Cache MISS - Execute graph with node-level recording
         logger.debug(f"Cache MISS - Executing graph...")
         
+        # 3. Inject Context (Self-RAG)
+        exec_input = input
+        if self.config.enable_context_injection:
+            exec_input = self._inject_context(input, input_str)
+
         self.metrics.start_execution()
         
         if self.recorder:
             # Use streaming-based execution for node-level observability
-            with self.recorder.trace(input_params=input, metadata={"cached": False, "adapter": "langgraph"}) as trace_id:
+            with self.recorder.trace(input_params=exec_input, metadata={"cached": False, "adapter": "langgraph"}) as trace_id:
                 try:
                     if self.circuit_breaker:
                         # Wrap the specialized node recording method
                         result = self.circuit_breaker.call(
                             self._invoke_with_node_recording,
-                            input, config, trace_id, **kwargs
+                            exec_input, config, trace_id, **kwargs
                         )
                     else:
-                        result = self._invoke_with_node_recording(input, config, trace_id, **kwargs)
+                        result = self._invoke_with_node_recording(exec_input, config, trace_id, **kwargs)
                         
                     self.recorder.finish_trace(trace_id, result, total_cost=0.0)
                 except Exception as e:
@@ -238,9 +255,9 @@ class EnhancedLangGraph:
                     raise e
         else:
             if self.circuit_breaker:
-                result = self.circuit_breaker.call(self.graph.invoke, input, config, **kwargs)
+                result = self.circuit_breaker.call(self.graph.invoke, exec_input, config, **kwargs)
             else:
-                result = self.graph.invoke(input, config, **kwargs)
+                result = self.graph.invoke(exec_input, config, **kwargs)
 
         
         execution_time = time.time() - start_time
@@ -291,7 +308,12 @@ class EnhancedLangGraph:
         # Execute
         self.metrics.start_execution()
         
-        result = await self.graph.ainvoke(input, config, **kwargs)
+        # 3. Inject Context (Self-RAG)
+        exec_input = input
+        if self.config.enable_context_injection:
+            exec_input = self._inject_context(input, input_str)
+
+        result = await self.graph.ainvoke(exec_input, config, **kwargs)
         
         execution_time = time.time() - start_time
         self.metrics.end_execution(execution_time)
@@ -442,6 +464,51 @@ class EnhancedLangGraph:
             logger.warning(f"Could not wrap nodes for recording: {e}")
 
     
+    def _inject_context(self, input_data: Dict[str, Any], input_str: str) -> Dict[str, Any]:
+        """Inject top N matches from cache as context into the input."""
+        matches = self.cache_manager.get_top_matches(
+            input_str, 
+            top_k=self.config.context_injection_top_k
+        )
+        
+        if not matches:
+            return input_data
+            
+        context_str = "\n".join([
+            f"Past Query: {m['query']}\nPast Response: {m['value']}" 
+            for m in matches
+        ])
+        
+        injected_context = self.config.context_injection_template.format(context=context_str)
+        
+        # Clone input to avoid side effects
+        new_input = input_data.copy()
+        
+        # Strategy 1: Look for "messages" (typical for Chat)
+        if "messages" in new_input and isinstance(new_input["messages"], list):
+            try:
+                from langchain_core.messages import SystemMessage
+                context_msg = SystemMessage(content=injected_context)
+                new_input["messages"] = [context_msg] + new_input["messages"]
+                logger.info("🧠 Orchestra: Injected semantic context into 'messages'")
+            except ImportError:
+                pass
+                
+        # Strategy 2: Look for common text keys
+        else:
+            found = False
+            for key in ["query", "input", "question", "text"]:
+                if key in new_input and isinstance(new_input[key], str):
+                    new_input[key] = injected_context + "\n\n" + new_input[key]
+                    logger.info(f"🧠 Orchestra: Injected semantic context into '{key}'")
+                    found = True
+                    break
+            
+            if not found:
+                 logger.warning("Orchestra: Context injection enabled but no 'messages' or common text keys found in input.")
+                
+        return new_input
+
     # ========================================================================
     # CACHE OPERATIONS (Delegated to CacheManager)
     # ========================================================================

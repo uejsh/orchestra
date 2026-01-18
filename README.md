@@ -15,13 +15,24 @@
 
 ### 📚 Table of Contents
 
+- [Installation](#%EF%B8%8F-installation)
 - [Quick Start](#-1-line-quick-start)
 - [Enterprise Features](#-enterprise-features)
-- [Configuration API Reference](#%EF%B8%8F-configuration-api-reference)
+- [Configuration Reference](#%EF%B8%8F-configuration-reference)
 - [Production Architecture (Redis/Postgres)](#-production-architecture)
 - [Multi-Agent Metrics & Observability](#-multi-agent-metrics--observability)
 - [CLI Reference](#-cli-reference)
 - [FAQ](#-faq)
+
+---
+
+## 🛠️ Installation
+
+```bash
+pip install orchestra-llm-cache
+```
+
+*Note: Requires Python 3.9+ and optionally `faiss-cpu` or `redis` for production backends.*
 
 ---
 
@@ -50,6 +61,15 @@ graph TD
 
 ---
 
+## 🧠 How it Works: Short-Circuit vs. Injection
+
+Orchestra utilizes two distinct semantic strategies to optimize your agents:
+
+1.  **Short-Circuiting (Semantic Cache)**: When a query is matched in the cache, Orchestra returns the response **instantly** without calling the LLM. It does *not* inject the result back into the LLM; it replaces the LLM call entirely. **Result:** 0ms LLM latency and $0 cost.
+2.  **Semantic Injection (Smart Tools)**: For new queries, Orchestra semantically "searches" your tool library and **injects** only the most relevant tools into the LLM's system prompt. **Result:** Dramatically smaller context windows and higher reasoning accuracy.
+
+---
+
 ## ⚡ Why Orchestra?
 
 *   **📉 Slash Bills by 85%**: Deduplicate similar queries (e.g., "What's the weather?" vs "How is the weather?") using **Hierarchical Embeddings**.
@@ -60,7 +80,16 @@ graph TD
 
 ---
 
-## ⚡ 1-Line Quick Start
+## 🧠 Solving the "Long Context Token Tax"
+As agents become more complex, their system prompts bloat with tools, instructions, and history. Orchestra solves this via:
+
+1.  **Dynamic Tool Pruning**: Instead of injecting 50 tools into every call, Orchestra semantically selects the **top 5 relevant tools**. This can reduce context usage by **10,000+ tokens** per turn.
+2.  **Semantic Memory (Cross-Session)**: By caching LLM responses semantically, Orchestra "remembers" similar complex reasoning paths across different users and sessions, preventing redundant long-context processing.
+3.  **Diff-Based Tracing**: The **Recorder** tracks state *mutations* rather than full snapshots, making it easier to analyze long-running agent loops without information overload.
+
+---
+
+## ⚡ The Orchestra Difference
 
 ### langgraph
 
@@ -76,33 +105,91 @@ result = agent.invoke({"query": "What are our Q3 goals?"})
 
 ---
 
-## 🛠️ Configuration API Reference
+## 🧠 Semantic Context Injection (Self-RAG)
 
-Pass `OrchestraConfig` to `enhance()` to customize behavior.
+Orchestra can turn your semantic cache into a **long-term memory** source. Instead of just short-circuiting exact (or near-exact) matches, Orchestra can retrieve the top $K$ most relevant past interactions and inject them into the current prompt as context.
+
+### How it works:
+1.  **Cache Miss**: If no match exceeds the `similarity_threshold`, the cache isn't short-circuited.
+2.  **Memory Retrieval**: Orchestra performs a loose search for the top $K$ relevant past responses.
+3.  **Prompt Augmentation**: These past responses are injected into the input (messages or text) before the LLM is called.
+
+### Example:
+```python
+config = OrchestraConfig(
+    enable_context_injection=True,
+    context_injection_top_k=2  # Inject 2 most relevant past answers
+)
+enhanced = enhance(graph, config)
+```
+
+---
+
+## 🔬 Advanced Examples
+
+### 1. Smart Tool Discovery (MCP)
+Automatically prune your tool list down to contextually relevant ones.
+
+```python
+from orchestra import enhance, OrchestraConfig
+
+config = OrchestraConfig(
+    mcp_servers=[
+        "http://localhost:8000/mcp", # Remote MCP server
+        "npx -y @modelcontextprotocol/server-gdrive" # CLI server
+    ],
+    enable_tool_search=True,
+    tool_search_top_k=5
+)
+
+# Orchestra will dynamicially search and inject tools
+agent = enhance(app.compile(), config)
+```
+
+### 2. Hierarchical Semantic Matching
+Better deduplication for complex prompts by matching both the whole query and its sub-chunks.
+
+```python
+config = OrchestraConfig(
+    enable_hierarchical=True,
+    hierarchical_weight_l1=0.7, # 70% weight on global match
+    hierarchical_weight_l2=0.3  # 30% weight on chunk match
+)
+```
+
+---
+
+## ⚙️ Configuration Reference
+
+### OrchestraConfig / OrchestraLangChainConfig
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | **Semantic Matching** | | | |
-| `similarity_threshold` | float | 0.92 | Cosine similarity required for a cache hit. |
-| `embedding_model` | str | `"all-MiniLM-L6-v2"` | SentenceTransformer model for vector generation. |
-| `enable_hierarchical` | bool | `False` | Enables L1 (Global) + L2 (Chunked) matching for high accuracy. |
-| `hierarchical_weight_l1` | float | 0.6 | Weight for whole-query match. |
-| `hierarchical_weight_l2` | float | 0.4 | Weight for individual phrase matching. |
-| **Caching & Storage** | | | |
-| `enable_cache` | bool | `True` | Master switch for semantic caching. |
-| `cache_ttl` | int | 3600 | Cache lifetime in seconds. |
-| `max_cache_size` | int | 10000 | Max entries in local store (if not using Redis). |
-| `redis_url` | str | `None` | Redis Stack connection URL for distributed caching. |
-| `enable_compression` | bool | `False` | Zlib compression for cached values. |
-| **Resilience & Tools** | | | |
-| `enable_circuit_breaker`| bool | `False` | Prevents cascading failures during outages. |
-| `circuit_breaker_threshold`| int | 5 | Failed attempts before opening circuit. |
-| `circuit_breaker_timeout`| float | 60.0 | Seconds before retrying the provider. |
-| `enable_tool_search` | bool | `True` | Dynamic tool discovery via MCP. |
-| `mcp_servers` | list | `None` | List of MCP server configs (standard MCP JSON format). |
+| `similarity_threshold` | `float` | `0.92` | Cosine similarity (0-1) for a cache hit. |
+| `embedding_model` | `str` | `"all-MiniLM-L6-v2"`| SentenceTransformer model to use. |
+| `enable_hierarchical` | `bool` | `False` | L1 + L2 matching (better for long queries). |
+| `hierarchical_weight_l1`| `float` | `0.6` | Weight for full-query similarity. |
+| `hierarchical_weight_l2`| `float` | `0.4` | Weight for chunk-level similarity. |
+| **Caching & Persistence** | | | |
+| `enable_cache` | `bool` | `True` | Master switch for semantic caching. |
+| `cache_ttl` | `int` | `3600` | Expiration time in seconds. |
+| `max_cache_size` | `int` | `10000` | Max entries in local store. |
+| `redis_url`| `str` | `None` | Redis Stack URL for shared caching. |
+| `enable_compression` | `bool` | `False` | Zlib compression for large values. |
+| **Self-RAG (Context Injection)** | | | |
+| `enable_context_injection`| `bool` | `False` | Inject similar past results as context. |
+| `context_injection_top_k`| `int` | `3` | Number of past matches to inject. |
+| `context_injection_template`| `str` | `...` | Prompt template for injected context. |
 | **Observability** | | | |
-| `enable_recorder` | bool | `True` | Enables step-by-step trace logging. |
-| `llm_cost_per_1k_tokens`| float | 0.03 | Basis for cost savings dashboard. |
+| `enable_recorder` | `bool` | `True` | Enables step-by-step trace logging. |
+| `llm_cost_per_1k_tokens`| `float` | `0.03` | Basis for cost savings estimation. |
+| **Resilience & Tools** | | | |
+| `enable_circuit_breaker`| `bool` | `False` | Prevent provider-timeout cascades. |
+| `circuit_breaker_threshold`| `int` | `5` | Failures before killing the circuit. |
+| `circuit_breaker_timeout`| `float` | `60.0` | Seconds to wait before retry. |
+| `enable_tool_search` | `bool` | `True` | Dynamic tool pruning (Smart Tools). |
+| `mcp_servers` | `list` | `None` | List of MCP host configurations. |
 
 ---
 

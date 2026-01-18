@@ -45,7 +45,15 @@ class OrchestraLangChainConfig:
         # Resilience
         enable_circuit_breaker: bool = False,
         circuit_breaker_threshold: int = 5,
-        circuit_breaker_timeout: float = 60.0
+        circuit_breaker_timeout: float = 60.0,
+        # Semantic Context Injection (Self-RAG)
+        enable_context_injection: bool = False,
+        context_injection_top_k: int = 3,
+        context_injection_template: str = (
+            "--- START OF RELEVANT CONTEXT (PAST RESPONSES) ---\n"
+            "{context}\n"
+            "--- END OF RELEVANT CONTEXT ---"
+        )
     ):
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
@@ -55,12 +63,15 @@ class OrchestraLangChainConfig:
         self.cache_ttl = cache_ttl
         self.max_cache_size = max_cache_size
         self.enable_compression = enable_compression
-        self.enable_compression = enable_compression
         self.llm_cost_per_1k_tokens = llm_cost_per_1k_tokens
         self.redis_url = redis_url
         self.enable_circuit_breaker = enable_circuit_breaker
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_timeout = circuit_breaker_timeout
+        # Self-RAG settings
+        self.enable_context_injection = enable_context_injection
+        self.context_injection_top_k = context_injection_top_k
+        self.context_injection_template = context_injection_template
         
         # Observability
         self.enable_recorder = True
@@ -164,8 +175,13 @@ class EnhancedLangChain(BaseAdapter):
         # 3. Execute
         self.metrics.start_execution()
         
+        # 3a. Inject Context (Self-RAG)
+        exec_input = input
+        if getattr(self.config, "enable_context_injection", False):
+            exec_input = self._inject_context(input, input_str)
+
         if self.recorder:
-            trace_ctx = self.recorder.trace(input_params=input, metadata={"cached": False, "adapter": "langchain"})
+            trace_ctx = self.recorder.trace(input_params=exec_input, metadata={"cached": False, "adapter": "langchain"})
             trace_id = trace_ctx.__enter__()
         else:
             trace_ctx = None
@@ -174,10 +190,10 @@ class EnhancedLangChain(BaseAdapter):
         try:
             if self.circuit_breaker:
                 result = self.circuit_breaker.call(
-                    self._invoke_or_run, input, config, **kwargs
+                    self._invoke_or_run, exec_input, config, **kwargs
                 )
             else:
-                result = self._invoke_or_run(input, config, **kwargs)
+                result = self._invoke_or_run(exec_input, config, **kwargs)
             
             if trace_ctx:
                 self.recorder.finish_trace(trace_id, result, total_cost=0.0)
@@ -221,8 +237,13 @@ class EnhancedLangChain(BaseAdapter):
         # 3. Execute
         self.metrics.start_execution()
         
+        # 3a. Inject Context (Self-RAG)
+        exec_input = input
+        if getattr(self.config, "enable_context_injection", False):
+            exec_input = self._inject_context(input, input_str)
+
         if self.recorder:
-            trace_ctx = self.recorder.trace(input_params=input, metadata={"cached": False, "adapter": "langchain_async"})
+            trace_ctx = self.recorder.trace(input_params=exec_input, metadata={"cached": False, "adapter": "langchain_async"})
             trace_id = trace_ctx.__enter__()
         else:
             trace_ctx = None
@@ -232,10 +253,10 @@ class EnhancedLangChain(BaseAdapter):
             if self.circuit_breaker:
                 # Async Circuit Breaker call
                 result = await self.circuit_breaker.acall(
-                    self._ainvoke_or_run, input, config, **kwargs
+                    self._ainvoke_or_run, exec_input, config, **kwargs
                 )
             else:
-                result = await self._ainvoke_or_run(input, config, **kwargs)
+                result = await self._ainvoke_or_run(exec_input, config, **kwargs)
                 
             if trace_ctx:
                 self.recorder.finish_trace(trace_id, result, total_cost=0.0)
@@ -266,6 +287,54 @@ class EnhancedLangChain(BaseAdapter):
         """Store result in semantic cache - delegates to CacheManager"""
         self.cache_manager.put(input_str, result, ttl=self.config.cache_ttl)
         logger.debug(f"Stored result in cache: {cache_key[:16]}...")
+
+    def _inject_context(self, input_data: Any, input_str: str) -> Any:
+        """Inject top N matches from cache as context into the input."""
+        matches = self.cache_manager.get_top_matches(
+            input_str, 
+            top_k=self.config.context_injection_top_k
+        )
+        
+        if not matches:
+            return input_data
+            
+        context_str = "\n".join([
+            f"Past Query: {m['query']}\nPast Response: {m['value']}" 
+            for m in matches
+        ])
+        
+        injected_context = self.config.context_injection_template.format(context=context_str)
+        
+        # Strategy A: Plain string input
+        if isinstance(input_data, str):
+            return injected_context + "\n\n" + input_data
+            
+        # Strategy B: Dictionary input
+        if isinstance(input_data, dict):
+            new_input = input_data.copy()
+            
+            # Look for "messages" (Typical for Chat Models)
+            if "messages" in new_input and isinstance(new_input["messages"], list):
+                try:
+                    from langchain_core.messages import SystemMessage
+                    context_msg = SystemMessage(content=injected_context)
+                    new_input["messages"] = [context_msg] + new_input["messages"]
+                    logger.info("🧠 Orchestra: Injected semantic context into LangChain messages")
+                    return new_input
+                except ImportError:
+                    pass
+            
+            # Look for common text keys
+            for key in ["query", "input", "question", "text"]:
+                if key in new_input and isinstance(new_input[key], str):
+                    new_input[key] = injected_context + "\n\n" + new_input[key]
+                    logger.info(f"🧠 Orchestra: Injected semantic context into LangChain '{key}'")
+                    return new_input
+                    
+            logger.warning("Orchestra: Context injection enabled but no suitable key found in dict input.")
+            return new_input
+            
+        return input_data
 
     def _invoke_or_run(self, input, config, **kwargs):
         """Helper to unify invoke/run/call logic for sync"""

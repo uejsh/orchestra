@@ -152,6 +152,38 @@ class CacheManager:
             
         return None
 
+    def get_top_matches(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """
+        Retrieve top K similar matches for context injection (Self-RAG).
+        Returns a list of dicts with 'query' and 'value'.
+        """
+        # 1. Generate Embedding
+        query_embedding = self.base_embedder.generate(query)
+        
+        # 2. Search in Semantic Store
+        candidates = self.store.search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            min_similarity=0.1  # Very loose for RAG context
+        )
+        
+        results = []
+        for state, score in candidates:
+            try:
+                # Decompress value
+                val = self.compressor.decompress(state.value)
+                orig_query = state.metadata.get("original_query", "Unknown query")
+                
+                results.append({
+                    "query": orig_query,
+                    "value": val,
+                    "similarity": score
+                })
+            except Exception as e:
+                logger.warning(f"Failed to decompress cached state for RAG: {e}")
+                
+        return results
+
     def put(self, query: str, value: Any, ttl: Optional[int] = None):
         """Store result in cache"""
         # 1. Compress
