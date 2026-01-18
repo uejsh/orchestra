@@ -15,15 +15,17 @@
 ---
 
 ### 📚 Table of Contents
-- [Quick Start](#-the-1-line-setup)
-- [Performance Benchmarks](#-wall-of-impact-performance-benchmarks)
-- [Self-RAG (Collective Intelligence)](#-collective-intelligence-self-rag)
-- [Premium Features (MCP, Recorder)](#-premium-features)
-- [Configuration Reference](#-configuration-reference)
-- [Production Architecture](#-production-architecture)
-- [Multi-Agent Metrics](#-multi-agent-metrics--observability)
-- [CLI Reference](#-recorder--cli-reference)
-- [FAQ](#-faq)
+- [🚀 Quick Start](#-the-1-line-setup)
+- [📈 Performance Benchmarks](#-wall-of-impact-performance-benchmarks)
+- [🧠 Self-RAG (Collective Intelligence)](#-collective-intelligence-self-rag)
+- [🏗️ Premium Features Deep Dive](#%EF%B8%8F-premium-features-deep-dive)
+- [⚙️ Full Configuration API](#%EF%B8%8F-full-configuration-api)
+- [💾 Persistence & Backends (Production)](#-persistence--backends-production)
+- [📝 Declarative Agents (YAML)](#-declarative-agents-yaml)
+- [📊 Metrics & Observability](#-metrics--observability)
+- [🎥 CLI Zero-to-Hero Reference](#-cli-zero-to-hero-reference)
+- [🧪 CI/CD & Semantic Eval](#-cicd--semantic-eval)
+- [❓ FAQ](#-faq)
 
 ---
 
@@ -37,11 +39,6 @@ In tests across 10,000+ real-world agent interactions, Orchestra has proven its 
 | **P99 Response Time** | ~4,200ms | **< 45ms** | **94x Faster** |
 | **Token Utilization** | 12.4M Tokens | **1.8M Tokens** | **Efficiency Gained** |
 | **Error Rate (Provider Timeout)** | 4.2% | **0.5%** | **Self-Healing** |
-
----
-
-### 📺 Watch: How to drop your LLM bill by 85% instantly
-[![Orchestra Demo](https://img.youtube.com/vi/TaIGvoKuWZs/0.jpg)](https://www.youtube.com/watch?v=TaIGvoKuWZs)
 
 ---
 
@@ -121,117 +118,167 @@ result = agent.invoke("Tell me the project status")
 
 ---
 
-## 🏗️ Premium Features
+## 🏗️ Premium Features Deep Dive
 
-- **🔌 Smart Tool Discovery (MCP)**: Stop paying the "Context Tax". Orchestra semantically searches your tool library and **injects only the top 5 relevant tools**.
-- **🎥 Time-Travel Debugging**: Trace every state mutation, diff, and LLM call exactly as it happened with the Orchestra CLI.
-- **🛡️ Outage Insurance**: Don't let an OpenAI or Anthropic outage kill your production agents. Circuit breakers detect failures in real-time.
-- **🗜️ Adaptive Compression**: Automatically compresses large cached results to minimize storage footprint in Redis/SQLite.
-- **🔬 Hierarchical Matching**: Better deduplication for complex prompts by matching both the whole query and its sub-chunks.
+### 🔬 Hierarchical Matching
+Standard vector search fails on long, complex prompts. Orchestra's **Hierarchical Matcher** breaks prompts into chunks and computes a weighted similarity across levels.
+- **L1 (Global)**: High-level intent matching.
+- **L2 (Local)**: Specific detail matching.
 
----
+### 🔌 Smart Tool Discovery (MCP)
+The **Context Tax** is real. Claude and GPT-4o cost more as your system prompt grows. Orchestra semantically searches your **Model Context Protocol (MCP)** tool library and injects only the top 5 relevant tools into the prompt.
 
-## ⚙️ Configuration Reference
+### 🎥 Time-Travel Debugging
+The **Orchestra Recorder** isn't just a logger; it's a flight data recorder. Trace every state mutation, diff, and LLM call exactly as it happened.
 
-### `OrchestraConfig` / `OrchestraLangChainConfig`
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| **Semantic Matching** | | | |
-| `similarity_threshold` | `float` | `0.92` | Cosine similarity (0-1) for a cache hit. |
-| `embedding_model` | `str` | `"all-MiniLM-L6-v2"`| SentenceTransformer model to use. |
-| `enable_hierarchical` | `bool` | `False` | L1 + L2 matching (better for long queries). |
-| `hierarchical_weight_l1`| `float` | `0.6` | Weight for full-query similarity. |
-| `hierarchical_weight_l2`| `float` | `0.4` | Weight for chunk-level similarity. |
-| **Caching & Persistence** | | | |
-| `enable_cache` | `bool` | `True` | Master switch for semantic caching. |
-| `cache_ttl` | `int` | `3600` | Expiration time in seconds. |
-| `redis_url`| `str` | `None` | Redis Stack URL for shared caching. |
-| `enable_compression` | `bool` | `False` | Zlib compression for large values. |
-| **Self-RAG (Context Injection)** | | | |
-| `enable_context_injection`| `bool` | `False` | Inject similar past results as context. |
-| `context_injection_top_k`| `int` | `3` | Number of past matches to inject. |
-| **Observability** | | | |
-| `enable_recorder` | `bool` | `True` | Enables step-by-step trace logging. |
-| `llm_cost_per_1k_tokens`| `float` | `0.03` | Basis for cost savings estimation. |
-| **Resilience & Tools** | | | |
-| `enable_circuit_breaker`| `bool` | `False` | Prevent provider-timeout cascades. |
-| `enable_tool_search` | `bool` | `True` | Dynamic tool pruning (Smart Tools). |
-| `mcp_servers` | `list` | `None` | List of MCP host configurations. |
+### 🛡️ Outage Insurance (Circuit Breakers)
+Don't let an OpenAI or Anthropic outage kill your production agents. Orchestra's circuit breaker detects failures in real-time and provides graceful fallbacks or cached "replays".
 
 ---
 
-## 🏗️ Production Architecture
+## ⚙️ Full Configuration API
 
-Move from local SQLite/NumPy to distributed backends for high-scale agent swarms.
+### `OrchestraConfig` (LangGraph) / `OrchestraLangChainConfig`
 
-### 1. Persistent Semantic Cache (Redis)
+| Category | Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Logic** | `similarity_threshold`| `float`| `0.92` | Cosine similarity for a cache hit. |
+| | `embedding_model` | `str` | `...` | Any `SentenceTransformer` model. |
+| **Hierarchy** | `enable_hierarchical` | `bool` | `False` | Multi-level (L1+L2) matching. |
+| | `hierarchical_weight_l1`| `float`| `0.6` | Importance of full-query match. |
+| | `hierarchical_weight_l2`| `float`| `0.4` | Importance of chunk-level match. |
+| **Cache** | `enable_cache` | `bool` | `True` | Global toggle for semantic caching. |
+| | `cache_ttl` | `int` | `3600` | Expiration (seconds). |
+| | `max_cache_size` | `int` | `10000` | Max entries before eviction. |
+| | `auto_cleanup` | `bool` | `True` | Background expired entry removal. |
+| | `cleanup_interval` | `int` | `300` | Interval for background cleanup. |
+| **Self-RAG** | `enable_context_injection`| `bool` | `False` | Inject past logic as context. |
+| | `context_injection_top_k`| `int` | `3` | Max past matches to inject. |
+| | `context_injection_template`| `str` | `...` | Custom Prompt template for RAG. |
+| **MCP** | `mcp_servers` | `list` | `None` | List of MCP host configs. |
+| | `enable_tool_search` | `bool` | `True` | Dynamic tool pruning. |
+| | `tool_search_top_k` | `int` | `5` | Max tools injected per turn. |
+| | `tool_context_threshold`| `float`| `0.10` | Similarity trigger for search. |
+| | `mcp_cache_ttl` | `int` | `3600` | TTL for MCP tool responses. |
+| **Resilience**| `enable_circuit_breaker`| `bool` | `False` | Prevent provider-timeout cascades. |
+| | `circuit_breaker_threshold`| `int` | `5` | Failures before opening. |
+| | `circuit_breaker_timeout`| `float`| `60.0` | Time until retry after opening. |
+| **Storage** | `redis_url`| `str` | `None` | Redis Stack URL for shared caching. |
+| | `enable_compression` | `bool` | `False` | Zlib compression for large cache. |
+| **Obs** | `enable_recorder` | `bool` | `True` | Enables step-by-step tracing. |
+| | `llm_cost_per_1k_tokens`| `float`| `0.03` | Savings calculation basis. |
+
+---
+
+## 💾 Persistence & Backends (Production)
+
+### 1. Redis Stack (Unified Semantic Store)
+Use Redis for distributed, shared collective intelligence across multiple agent pods.
 ```python
 config = OrchestraConfig(
-    redis_url="redis://:password@your-redis-stack:6379",
-    cache_ttl=86400, # 24 hours
+    redis_url="redis://:password@your-redis:6379",
     similarity_threshold=0.95
 )
-agent = enhance(graph, config)
 ```
 
-### 2. Scalable Tracing (Postgres)
+### 2. Recorder Backends
+- **SQLite (Default)**: Perfect for local dev. Traces stored in `.orchestra/traces.db`.
+- **PostgreSQL**: Production-grade tracing.
 ```python
-storage = PostgresStorage(dsn="postgresql://user:pass@localhost:5432/orchestra_db")
+from orchestra.recorder.storage import PostgresStorage
+storage = PostgresStorage(dsn="postgresql://user:pass@localhost:5432/db")
 OrchestraRecorder._instance = OrchestraRecorder(storage=storage)
-agent = enhance(graph)
 ```
 
 ---
 
-## 📊 Multi-Agent Metrics & Observability
+## 📝 Declarative Agents (YAML)
 
-Orchestra's metrics engine tracks performance in real-time across your entire agent network.
+Build complex, intelligent agents without writing Python boilerplate.
 
-- **Global Aggregation**: Enhance a Supervisor graph to capture metrics for the entire session.
-- **Granular Metrics**: Enhance specific sub-agents to track their individual efficiency.
+```yaml
+# agent.yaml
+model:
+  provider: "openai"
+  name: "gpt-4o"
+  temperature: 0.2
+
+orchestra:
+  similarity_threshold: 0.94
+  enable_hierarchical: true
+  top_k: 5
+
+mcp_servers:
+  - name: "filesystem"
+    command: "npx"
+    args: ["@modelcontextprotocol/server-filesystem", "/users/data"]
+
+system_context: |
+  You are an expert data analyst with access to local files.
+```
+
+Run it instantly:
+```bash
+python -m orchestra.cli run agent.yaml --interactive
+```
+
+---
+
+## 📊 Metrics & Observability
+
+Orchestra's metrics engine tracks performance in real-time.
 
 ```python
 stats = agent.get_metrics()
-print(f"💰 Saved: ${stats['estimated_cost_saved']:.4f}")
-print(f"📈 Hit Rate: {stats['cache_hit_rate']*100:.1f}%")
-
-# Export for Grafana/ELK
-agent.export_metrics("session_stats.json")
+# {
+#   "cache_hit_rate": 0.42,
+#   "estimated_cost_saved": 12.45,
+#   "avg_latency": 0.045,
+#   ...
+# }
 ```
 
 ---
 
-## 🎥 Recorder & CLI Reference
+## 🎥 CLI Zero-to-Hero Reference
 
-Inspect agent state mutations with the high-speed CLI.
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| **`trace ls`** | `... trace ls --limit 20` | List recent execution traces. |
+| **`trace view`**| `... trace view <ID>` | Deep dive into step-by-step state. |
+| **`trace prune`**| `... trace prune --days 7` | Clean up old tracing data. |
+| **`eval`** | `... eval "Actual" "Expect"`| Semantic similarity check (CI/CD). |
+| **`run`** | `... run config.yaml` | Run a declarative agent. |
 
-```bash
-# List recent execution traces
-python -m orchestra.cli trace ls
+---
 
-# Inspect specific step-by-step state changes
-python -m orchestra.cli trace view <TRACE_ID>
+## 🧪 CI/CD & Semantic Eval
 
-# Semantic Eval (Great for CI/CD)
-python -m orchestra.cli eval "Hello" "Hi" --threshold 0.9
+Use Orchestra in your test suite to verify agent outputs without brittle string matching.
 
-# Run a declarative agent
-python -m orchestra.cli run agent.yaml --query "Hello"
+```python
+from orchestra.eval import FuzzyAssert
+
+def test_agent_output():
+    actual = agent.invoke("Summarize the Q3 report")
+    expected = "The report shows a 15% increase in revenue..."
+    
+    # Passes if semantically similar > 0.92
+    FuzzyAssert.similar(actual, expected, threshold=0.95)
 ```
 
 ---
 
 ## ❓ FAQ
 
-**Q: How accurate is semantic matching?**
-By default, we use a 0.92 threshold. It's high enough to ensure accuracy but loose enough to catch rephrasings.
+**Q: How does this affect privacy?**
+Orchestra stores hashes and embeddings. No raw data leaves your system unless you use a cloud embedding provider.
 
-**Q: Does it support custom embeddings?**
-Yes, any `SentenceTransformer` model can be passed to `embedding_model` in `OrchestraConfig`.
+**Q: Can I use it with custom LangGraph nodes?**
+Yes. Orchestra wraps the entire graph; it is node-agnostic.
 
-**Q: Is it safe for production?**
-Absolutely. We include **Circuit Breakers** and **Adaptive Compression** specifically for high-volume production loads.
+**Q: What embeddings are supported?**
+Any model from the `sentence-transformers` library or OpenAI's `text-embedding-3-small`.
 
 ---
 
