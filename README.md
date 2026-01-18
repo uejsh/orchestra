@@ -14,6 +14,7 @@
 ---
 
 ### 📚 Table of Contents
+
 - [Quick Start](#-1-line-quick-start)
 - [Feature Deep Dive](#-feature-deep-dive)
 - [Benchmarks](#-proof-of-value-benchmarking)
@@ -24,12 +25,14 @@
 ---
 
 ### 📺 Watch: How to drop your LLM bill by 85% instantly
+
 [![Orchestra Demo](https://img.youtube.com/vi/TaIGvoKuWZs/0.jpg)](https://www.youtube.com/watch?v=TaIGvoKuWZs)
 
 ---
 
 ## 🚀 The "Zero-Rewrite" AI Framework
-Orchestra is a high-performance orchestration layer that adds **Semantic Caching**, **Outage Resilience**, and **Smart Tool Discovery** to LangGraph and LangChain. 
+
+Orchestra is a high-performance orchestration layer that adds **Semantic Caching**, **Outage Resilience**, and **Smart Tool Discovery** to LangGraph and LangChain.
 
 It understands the *meaning* of requests, skipping the LLM entirely when a semantically similar query has already been answered.
 
@@ -79,6 +82,7 @@ pip install orchestra-llm-cache[full]
 ## ⚡ 1-Line Quick Start
 
 ### langgraph
+
 ```python
 from orchestra import enhance
 
@@ -90,6 +94,7 @@ result = agent.invoke({"query": "What are our Q3 goals?"})
 ```
 
 ### langchain
+
 ```python
 from orchestra import enhance
 
@@ -104,11 +109,14 @@ result = chain.invoke("Explain the merger")
 ## 🔍 Feature Deep Dive
 
 ### 🧠 Semantic Caching (Hierarchical)
+
 Unlike basic caches, Orchestra uses a **2-Level Hierarchical Matching** system:
+
 1.  **L1 (Coarse)**: Matches the full query vector for broad similarity.
 2.  **L2 (Fine)**: Breaks text into chunks to match specific phrases, ensuring high precision even for complex prompts.
 
 ### 🛡️ Enterprise Resilience (Circuit Breaker)
+
 Stop cascading failures. If your LLM provider starts timing out, Orchestra opens the circuit, failing fast and serving cached results until the provider recovers.
 
 ```python
@@ -120,9 +128,11 @@ config = OrchestraConfig(
 ```
 
 ### 🔌 Smart Tool Discovery (MCP)
+
 Are you loading 50+ tools into Claude? You're burning money. Orchestra indexes your MCP tools semantically and only injects the ones relevant to the current user query.
 
 **1. Define your MCP Servers**
+
 Orchestra connects to any standard MCP server (e.g., SQLite, Brave Search, Google Maps).
 
 ```python
@@ -145,7 +155,9 @@ servers = [
 ```
 
 **2. Enable Tool Search**
+
 Pass the servers to `OrchestraConfig`. Orchestra will now:
+
 1.  Connect to the servers on startup.
 2.  Index all available tools.
 3.  On every query, semantically search for the top 5 relevant tools and inject them into the LLM context.
@@ -161,6 +173,7 @@ agent = enhance(graph, config)
 ```
 
 ### 🎥 Recorder & Time-Travel
+
 Orchestra records every node execution, input, and output difference.
 -   **SQLite**: Zero-config local tracing.
 -   **PostgreSQL**: Scalable production tracing.
@@ -177,7 +190,9 @@ python -m orchestra.cli trace ls
 To prove the immense value of Orchestra, we propose running the **MMLU (Massive Multitask Language Understanding)** benchmark.
 
 ### Why MMLU?
+
 MMLU covers 57 subjects across STEM, the humanities, and more. It represents a realistic, high-volume workload perfect for demonstrating:
+
 1.  **Cost Reduction**: In regression testing, ~100% of questions are repeated. Orchestra reduces the cost of running MMLU from **$X to ~$0**.
 2.  **Semantic Variation**: By perturbing MMLU questions slightly (e.g., rephrasing), we can prove that Orchestra's semantic cache still hits, unlike traditional key-value caches.
 3.  **Speed**: 
@@ -185,6 +200,7 @@ MMLU covers 57 subjects across STEM, the humanities, and more. It represents a r
     -   **With Orchestra**: **<0.05s** per question (Cache hit).
 
 ### Micro-Benchmark Result
+
 Running a local demo `benchmark_demo.py` confirms the latency gap:
 
 | Query Type | Latency (s) | Status |
@@ -198,6 +214,7 @@ Running a local demo `benchmark_demo.py` confirms the latency gap:
 ---
 
 ## 💾 Production Backends
+
 | Backend | Best For | Description |
 |---------|----------|-------------|
 | **SQLite** | Development | Local, file-based, zero-config. |
@@ -209,6 +226,7 @@ Running a local demo `benchmark_demo.py` confirms the latency gap:
 ## 🛠️ Configuration Cookbook
 
 ### Advanced Caching (Compression & Tuning)
+
 Reduce memory usage by 60% with compression and fine-tune semantic matching.
 
 ```python
@@ -225,6 +243,7 @@ config = OrchestraConfig(
 ```
 
 ### Redis Backend (Distributed)
+
 Share the semantic cache across multiple pods/instances.
 
 ```python
@@ -235,6 +254,7 @@ config = OrchestraConfig(
 ```
 
 ### Observability & Metrics
+
 Access real-time cost savings and performance metrics programmatically.
 
 ```python
@@ -253,6 +273,7 @@ agent.export_metrics("orchestra_metrics.json")
 ```
 
 ### Custom Embeddings
+
 Use a larger or multilingual model for better semantic understanding.
 
 ```python
@@ -264,6 +285,7 @@ config = OrchestraConfig(
 ---
 
 ## 💻 CLI Reference
+
 Orchestra ships with a powerful CLI for inspection and running declarative agents.
 
 ```bash
@@ -288,13 +310,13 @@ python -m orchestra.cli run agent.yaml --interactive
 ---
 
 ## ❓ FAQ
-**Q: How accurate is the semantic matching?**  
-A: By default, we use a 0.92 cosine similarity threshold. It's high enough to ensure accuracy but loose enough to catch "How's the weather?" vs "What's the weather like?".
 
-**Q: Does this work with exact matches?**  
-A: Yes. If a query is identical, it hits the cache instantly. If it's a paraphrase, we use vector embeddings.
+**Q: How accurate is the semantic matching?**
+By default, we use a 0.92 cosine similarity threshold. It's high enough to ensure accuracy but loose enough to catch "How's the weather?" vs "What's the weather like?".
+
+**Q: Does this work with exact matches?**
+Yes. If a query is identical, it hits the cache instantly. If it's a paraphrase, we use vector embeddings.
 
 ---
+
 **Start building unbreakable, affordable AI agents today. 🌟 Give us a star on GitHub!**
-   
- 
